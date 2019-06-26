@@ -19,6 +19,7 @@ import os
 import copy
 from torch.utils import data
     
+import _pickle as pickle
 
 class ToyDataset(data.Dataset):
     '''
@@ -50,7 +51,44 @@ class ToyDataset(data.Dataset):
 
         return X#, y
     
-
+def parse_label_file():
+    '''
+    loads text file, parses into a list of labels, and pickles result
+    '''
+    f = open('imagenet_classes.txt','rb')
+    label_dict = {}    
+    for line in f:
+        string = line.decode()
+        parts = string.rstrip().split(":")
+        idx = int(parts[0][1:])
+        label = parts[1]
+        label_dict[idx] = label
+    f.close()
+    
+    label_list = []
+    for i in range(0,len(label_dict)):
+        label_list.append(label_dict[i]) 
+    
+    new_f = open("imagenet_label_list.cpkl", 'wb')    
+    pickle.dump(label_list,new_f)
+    new_f.close()
+    
+def load_label_list(pickle_name = "imagenet_label_list.cpkl"):
+    try:
+        f = open(pickle_name, 'rb')
+        label_list = pickle.load(f)
+    except:
+        parse_label_file()
+        f = open(pickle_name, 'rb')
+        label_list = pickle.load(f)
+    return label_list
+    
+def print_preds(preds,label_list):
+    # get index of max prob for each item
+    for item in out:
+        idx = np.argmax(item)
+        print ("Predicted class: {}".format(label_list[idx]))
+ 
 # load pretrained model
 try:
     resnet18
@@ -64,7 +102,7 @@ use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
 
 # Parameters
-params = {'batch_size': 10,
+params = {'batch_size': 20,
           'shuffle': True,
           'num_workers': 2}
 max_epochs = 1
@@ -90,10 +128,13 @@ batch = next(iter(training_generator))
 with torch.set_grad_enabled(False):
     batch = batch.to(device)
     resnet18 = resnet18.to(device)
-    out = resnet18(batch)
-    probs = F.softmax(out,dim = 0)
-    out = out.cpu().numpy()
+    pred = resnet18(batch)
+    probs = F.softmax(pred,dim = 1)
+    out = probs.cpu().numpy()
     del batch, probs
     
 torch.cuda.empty_cache()
 del training_generator
+
+
+
