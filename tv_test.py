@@ -32,8 +32,8 @@ class ToyDataset(data.Dataset):
         self.file_list =  [directory_path+'/'+f for f in os.listdir(directory_path)]
         
         self.transforms = transforms.Compose([\
-        transforms.Resize(620),
-        transforms.CenterCrop(600),
+        transforms.Resize(300),
+        transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
@@ -61,7 +61,7 @@ def parse_label_file():
         string = line.decode()
         parts = string.rstrip().split(":")
         idx = int(parts[0][1:])
-        label = parts[1]
+        label = parts[1].split("'")[1].split(",")[0]
         label_dict[idx] = label
     f.close()
     
@@ -88,27 +88,54 @@ def print_preds(preds,label_list):
     for item in out:
         idx = np.argmax(item)
         print ("Predicted class: {}".format(label_list[idx]))
+
+
+def imshow(inp, title=None):
+    """
+    Imshow for Tensor.
+    """
+    inp = inp.cpu().numpy()
+    print (inp.shape)
+    inp = inp.transpose((1, 2, 0))
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    inp = std * inp + mean
+    inp = np.clip(inp, 0, 1)
+    plt.figure(figsize = (10,80))
+    plt.imshow(inp)
+    if title is not None:
+        plt.title(title)
+    plt.pause(0.001)  # pause a bit so that plots are updated
+
+
+##############################################################################
+
+
+# load labels
+label_list = load_label_list()
  
 # load pretrained model
 try:
-    resnet18
+    model
     print("Model already loaded")
 except:
-    resnet18 = models.resnet18(pretrained = True)
+    #model = models.densenet161(pretrained = True)
+    model = models.resnet152(pretrained = True)
     print("Reloaded model")
-    
+
 # CUDA for PyTorch
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
 
 # Parameters
-params = {'batch_size': 20,
+params = {'batch_size': 8,
           'shuffle': True,
           'num_workers': 2}
 max_epochs = 1
 
 # Generators
-test_set = ToyDataset('data/train')
+#test_set = ToyDataset('data_stanford_cars/train')
+test_set = ToyDataset('data_ILSVRC_2017/test')
 training_generator = data.DataLoader(test_set, **params)
 
 # Test data_loader
@@ -127,14 +154,16 @@ if False:
 batch = next(iter(training_generator))
 with torch.set_grad_enabled(False):
     batch = batch.to(device)
-    resnet18 = resnet18.to(device)
-    pred = resnet18(batch)
+    model = model.to(device)
+    pred = model(batch)
     probs = F.softmax(pred,dim = 1)
     out = probs.cpu().numpy()
-    del batch, probs
-    
+
+ # clean up some resources   
 torch.cuda.empty_cache()
 del training_generator
 
-
+plot = torchvision.utils.make_grid(batch)
+preds = [label_list[np.argmax(out[i])] for i in range(len(out))] 
+imshow(plot,preds)
 
