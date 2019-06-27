@@ -129,7 +129,20 @@ class Test_Dataset(data.Dataset):
     
 
 def load_model():
-    pass
+    """
+    Loads pretrained torchvision model and redefines fc layer for car classification
+    """
+    model = models.vgg19(pretrained = True)
+    #model = models.resnet50(pretrained = True)
+    in_feat_num = model.classifier[3].in_features
+    mid_feat_num = int(np.sqrt(in_feat_num))
+    out_feat_num = 1
+    
+    # redefine the last two layers of the classifier for car classification
+    model.classifier[3] = nn.Linear(in_feat_num,mid_feat_num)
+    model.classifier[6] = nn.Linear(mid_feat_num, out_feat_num)
+    
+    return model
 
 def train():
     pass
@@ -169,15 +182,18 @@ device = torch.device("cuda:0" if use_cuda else "cpu")
 # create training params
 params = {'batch_size': 64,
           'shuffle': True,
-          'num_workers': 0}
+          'num_workers': 6}
 max_epochs = 5
 
-# create training dataloader
+# create dataloaders
 pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"
 neg_path = "/media/worklab/data_HDD/cv_data/images/data_imagenet_loader"
 train_data = Train_Dataset(pos_path,neg_path)
-trainloader = data.DataLoader(train_data, **params)
-
-# create testing dataloader
 test_data = Test_Dataset(pos_path,neg_path)
+trainloader = data.DataLoader(train_data, **params)
 testloader = data.DataLoader(test_data, **params)
+
+# define CNN model
+model = load_model()
+model = model.to(device)
+
