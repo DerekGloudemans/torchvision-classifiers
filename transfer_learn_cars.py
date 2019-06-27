@@ -37,9 +37,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils import data
 from torch.optim import lr_scheduler
+from torch import multiprocessing
 
 # for convenient data loading, image representation and dataset management
-from torchvision import datasets, models, transforms
+from torchvision import models, transforms
 from PIL import Image
 
 # always good to have
@@ -48,7 +49,7 @@ import os
 import numpy as np    
 import _pickle as pickle
 import random
-
+import copy
 
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset(data.Dataset):
@@ -132,11 +133,12 @@ def load_model():
     """
     Loads pretrained torchvision model and redefines fc layer for car classification
     """
+    # uses about 1 GiB of GPU memory
     model = models.vgg19(pretrained = True)
     #model = models.resnet50(pretrained = True)
     in_feat_num = model.classifier[3].in_features
     mid_feat_num = int(np.sqrt(in_feat_num))
-    out_feat_num = 1
+    out_feat_num = 2
     
     # redefine the last two layers of the classifier for car classification
     model.classifier[3] = nn.Linear(in_feat_num,mid_feat_num)
@@ -144,8 +146,92 @@ def load_model():
     
     return model
 
-def train():
-    pass
+def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_sizes, num_epochs=5):
+    """
+    Alternates between a training step and a validation step at each epoch. 
+    Validation results are reported but don't impact model weights
+    """
+    start = time.time()
+
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_acc = 0.0
+    for epoch in range(num_epochs):
+        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+        print('-' * 10)
+
+        # Each epoch has a training and validation phase
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                scheduler.step()
+                model.train()  # Set model to training mode
+            else:
+                model.eval()   # Set model to evaluate mode
+
+            running_loss = 0.0
+            running_corrects = 0
+
+            # Iterate over data.
+            count = 0
+            for inputs, labels in dataloaders[phase]:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # forward
+                # track history if only in train
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs = model(inputs)
+                    _, preds = torch.max(outputs, 1)
+                    loss = criterion(outputs, labels)
+
+                    # backward + optimize only if in training phase
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+
+                # statistics
+                running_loss += loss.item() * inputs.size(0)
+                running_corrects += torch.sum(preds == labels.data)
+                
+                # verbose update
+                count += 1
+                if count % 100 == 0:
+                    print("on minibatch {}".format(count))
+                    
+            epoch_loss = running_loss / dataset_sizes[phase]
+            epoch_acc = running_corrects.double() / dataset_sizes[phase]
+
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
+                phase, epoch_loss, epoch_acc))
+
+            # deep copy the model
+            if phase == 'val' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                del best_model_wts
+                best_model_wts = copy.deepcopy(model.state_dict())
+
+        print()
+        
+        # save checkpoint
+        PATH = "checkpoint_{}.pt".format(epoch)
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss
+            }, PATH)
+
+    time_elapsed = time.time() - start
+    print('Training complete in {:.0f}m {:.0f}s'.format(
+        time_elapsed // 60, time_elapsed % 60))
+    print('Best val Acc: {:4f}'.format(best_acc))
+
+    # load best model weights
+    model.load_state_dict(best_model_wts)
+    return model
+
 
 def show_output():
     pass
@@ -171,29 +257,61 @@ def flatten_image_directory():
 
 
 #------------------------------ Main code here -------------------------------#
-
-# for repeatability
-random.seed = 1
-
-# CUDA for PyTorch
-use_cuda = torch.cuda.is_available()
-device = torch.device("cuda:0" if use_cuda else "cpu")
-
-# create training params
-params = {'batch_size': 64,
-          'shuffle': True,
-          'num_workers': 6}
-max_epochs = 5
-
-# create dataloaders
-pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"
-neg_path = "/media/worklab/data_HDD/cv_data/images/data_imagenet_loader"
-train_data = Train_Dataset(pos_path,neg_path)
-test_data = Test_Dataset(pos_path,neg_path)
-trainloader = data.DataLoader(train_data, **params)
-testloader = data.DataLoader(test_data, **params)
-
-# define CNN model
-model = load_model()
-model = model.to(device)
-
+if __name__ == "__main__":
+    try:
+        torch.multiprocessing.set_start_method('spawn')    
+    except:
+        print("If multiprocessing context wasn't already set, error")
+    
+    # use this to watch gpu in console            watch -n 2 nvidia-smi
+    
+    # for repeatability
+    random.seed = 1
+    verbose = True
+    
+    # CUDA for PyTorch
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+    torch.cuda.empty_cache()
+    
+    # create training params
+    params = {'batch_size': 32,
+              'shuffle': True,
+              'num_workers': 6}
+    num_epochs = 10
+    
+    # create dataloaders
+    pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"
+    neg_path = "/media/worklab/data_HDD/cv_data/images/data_imagenet_loader"
+    train_data = Train_Dataset(pos_path,neg_path)
+    test_data = Test_Dataset(pos_path,neg_path)
+    trainloader = data.DataLoader(train_data, **params)
+    testloader = data.DataLoader(test_data, **params)
+    print("Dataloaders created.")
+    
+    # define CNN model
+    model = load_model()
+    model = model.to(device)
+    print("Model created.")
+    
+    # define loss function
+    criterion = nn.CrossEntropyLoss()
+    
+    # Observe that all parameters are being optimized
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    
+    # Decay LR by a factor of 0.1 every 7 epochs
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
+    
+    # train model
+    dataloaders = {
+            "train":trainloader,
+            "val": testloader
+            }
+    datasizes = {
+            "train": len(train_data),
+            "val": len(test_data)
+            }
+    print("Beginning training.")
+    model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,
+                           num_epochs)
