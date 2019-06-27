@@ -130,9 +130,8 @@ params = {'batch_size': 16,
 max_epochs = 1
 
 # Generators
-#test_set = ToyDataset('data_stanford_cars/train')
+test_set = ToyDataset('data_stanford_cars/train')
 #test_set = ToyDataset('data_ILSVRC_2017/test')
-test_set = ToyDataset('/media/worklab/data_HDD/train')
 training_generator = data.DataLoader(test_set, **params)
 
 # Test data_loader
