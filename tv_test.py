@@ -7,16 +7,12 @@ from __future__ import print_function, division
 from PIL import Image
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
-import torch.optim as optim
-from torch.optim import lr_scheduler
 import numpy as np
 import torchvision
-from torchvision import datasets, models, transforms
+from torchvision import models, transforms
 import matplotlib.pyplot as plt
 import time
 import os
-import copy
 from torch.utils import data
     
 import _pickle as pickle
@@ -95,7 +91,6 @@ def imshow(inp, title=None):
     Imshow for Tensor.
     """
     inp = inp.cpu().numpy()
-    print (inp.shape)
     inp = inp.transpose((1, 2, 0))
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
@@ -120,7 +115,8 @@ try:
     print("Model already loaded")
 except:
     #model = models.densenet161(pretrained = True)
-    model = models.resnet152(pretrained = True)
+    #model = models.resnet50(pretrained = True)
+    model = models.vgg19(pretrained = True)
     print("Reloaded model")
 
 # CUDA for PyTorch
@@ -128,14 +124,15 @@ use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
 
 # Parameters
-params = {'batch_size': 8,
+params = {'batch_size': 16,
           'shuffle': True,
-          'num_workers': 2}
+          'num_workers': 4}
 max_epochs = 1
 
 # Generators
 #test_set = ToyDataset('data_stanford_cars/train')
-test_set = ToyDataset('data_ILSVRC_2017/test')
+#test_set = ToyDataset('data_ILSVRC_2017/test')
+test_set = ToyDataset('/media/worklab/data_HDD/train')
 training_generator = data.DataLoader(test_set, **params)
 
 # Test data_loader
@@ -152,6 +149,7 @@ if False:
     
 # run one batch through the model
 batch = next(iter(training_generator))
+start_time = time.time()
 with torch.set_grad_enabled(False):
     batch = batch.to(device)
     model = model.to(device)
@@ -159,7 +157,11 @@ with torch.set_grad_enabled(False):
     probs = F.softmax(pred,dim = 1)
     out = probs.cpu().numpy()
 
- # clean up some resources   
+end_time = time.time()
+elapsed = end_time - start_time
+print("Elapsed time for {} images: {} sec. Processing rate: {} fps".format(params['batch_size'],elapsed,params['batch_size']/elapsed))
+
+# clean up some resources   
 torch.cuda.empty_cache()
 del training_generator
 
