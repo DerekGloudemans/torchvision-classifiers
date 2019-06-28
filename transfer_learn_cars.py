@@ -51,6 +51,7 @@ import numpy as np
 import _pickle as pickle
 import random
 import copy
+import matplotlib.pyplot as plt
 
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset(data.Dataset):
@@ -147,6 +148,7 @@ def make_model():
     
     return model
 
+
 def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_sizes, num_epochs=5, start_epoch = 0):
     """
     Alternates between a training step and a validation step at each epoch. 
@@ -233,6 +235,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
     model.load_state_dict(best_model_wts)
     return model
 
+
 def load_model(checkpoint_file,model,optimizer):
     """
     Reloads a checkpoint, loading the model and optimizer state_dicts and 
@@ -245,9 +248,40 @@ def load_model(checkpoint_file,model,optimizer):
 
     return model,optimizer,epoch
     
-def show_output():
-    pass
-
+def show_output(model,loader):
+    batch,labels = next(iter(loader))
+    batch = batch.to(device)
+    
+    out = model(batch)
+    _,preds = torch.max(out,1)
+    
+    batch = batch.to('cpu')
+    preds = preds.to('cpu')
+    
+    # define figure subplot grid
+    batch_size = loader.batch_size
+    fig, axs = plt.subplots((batch_size+7)//8, 8, constrained_layout=True)
+    
+    # for image in batch, put image and associated label in grid
+    for i in range(0,batch_size):
+        im =  batch[i].numpy().transpose((1,2,0))
+        
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        im = std * im + mean
+        im = np.clip(im, 0, 1)
+        
+        if preds[i] == 1:
+            label = "pred: car"
+        else:
+            label = "pred: non-car"
+        
+        axs[i//8,i%8].imshow(im)
+        axs[i//8,i%8].set_title(label)
+        axs[i//8,i%8].set_xticks([])
+        axs[i//8,i%8].set_yticks([])
+        
+        plt.pause(0.0001)
 
 def flatten_image_directory():
     """
@@ -306,32 +340,44 @@ if __name__ == "__main__":
     testloader = data.DataLoader(test_data, **params)
     print("Dataloaders created.")
     
-    # define CNN model
-    model = make_model()
-    model = model.to(device)
-    print("Model created.")
+    try:
+        model
+        print("Model already loaded.")
+    except:
+        
+        # define CNN model
+        model = make_model()
+        model = model.to(device)
+        print("Model created.")
+        
+        # define loss function
+        criterion = nn.CrossEntropyLoss()
+        
+        # all parameters are being optimized, not just fc layer
+        optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+        
+        # Decay LR by a factor of 0.1 every 7 epochs
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
+        
+        # define start epoch for consistent labeling if checkpoint is reloaded
+        start_epoch = 0
     
-    # define loss function
-    criterion = nn.CrossEntropyLoss()
-    
-    # Observe that all parameters are being optimized
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    
-    # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
-    
-    # define start epoch for consistent labeling if checkpoint is reloaded
-    start_epoch = 0
-    
+        # if checkpoint specified, load model and optimizer weights from checkpoint
+        if checkpoint_file != None:
+            model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
+            print("Checkpoint loaded.")
+            
     # group dataloaders
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    # if checkpoint specified, load model and optimizer weights from checkpoint
-    if checkpoint_file != None:
-        model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
+   
     
+    if False:    
     # train model
-    print("Beginning training.")
-    model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,
-                           num_epochs, start_epoch)
+        print("Beginning training.")
+        model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,
+                               num_epochs, start_epoch)
+
+
+    show_output(model,testloader)
