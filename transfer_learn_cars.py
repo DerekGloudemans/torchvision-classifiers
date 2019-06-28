@@ -41,7 +41,8 @@ from torch import multiprocessing
 
 # for convenient data loading, image representation and dataset management
 from torchvision import models, transforms
-from PIL import Image
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # always good to have
 import time
@@ -129,7 +130,7 @@ class Test_Dataset(data.Dataset):
         return X, y
     
 
-def load_model():
+def make_model():
     """
     Loads pretrained torchvision model and redefines fc layer for car classification
     """
@@ -146,7 +147,7 @@ def load_model():
     
     return model
 
-def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_sizes, num_epochs=5):
+def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_sizes, num_epochs=5, start_epoch = 0):
     """
     Alternates between a training step and a validation step at each epoch. 
     Validation results are reported but don't impact model weights
@@ -155,7 +156,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch,num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
 
@@ -232,12 +233,27 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
     model.load_state_dict(best_model_wts)
     return model
 
+def load_model(checkpoint_file,model,optimizer):
+    """
+    Reloads a checkpoint, loading the model and optimizer state_dicts and 
+    setting the start epoch
+    """
+    checkpoint = torch.load(checkpoint_file)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = checkpoint['epoch']
 
+    return model,optimizer,epoch
+    
 def show_output():
     pass
 
 
 def flatten_image_directory():
+    """
+    I used this once to combine images from all of the files loaded by the imagenet
+    into a single superdirectory
+    """
     from shutil import copyfile
 
     train_directory = "/media/worklab/data_HDD/cv_data/images/data_imagenet_loader/train"
@@ -267,7 +283,6 @@ if __name__ == "__main__":
     
     # for repeatability
     random.seed = 1
-    verbose = True
     
     # CUDA for PyTorch
     use_cuda = torch.cuda.is_available()
@@ -278,7 +293,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 6}
-    num_epochs = 10
+    num_epochs = 50
+    
+    checkpoint_file = "checkpoint_5.pt"
     
     # create dataloaders
     pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"
@@ -290,7 +307,7 @@ if __name__ == "__main__":
     print("Dataloaders created.")
     
     # define CNN model
-    model = load_model()
+    model = make_model()
     model = model.to(device)
     print("Model created.")
     
@@ -303,15 +320,18 @@ if __name__ == "__main__":
     # Decay LR by a factor of 0.1 every 7 epochs
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
     
+    # define start epoch for consistent labeling if checkpoint is reloaded
+    start_epoch = 0
+    
+    # group dataloaders
+    dataloaders = {"train":trainloader, "val": testloader}
+    datasizes = {"train": len(train_data), "val": len(test_data)}
+    
+    # if checkpoint specified, load model and optimizer weights from checkpoint
+    if checkpoint_file != None:
+        model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
+    
     # train model
-    dataloaders = {
-            "train":trainloader,
-            "val": testloader
-            }
-    datasizes = {
-            "train": len(train_data),
-            "val": len(test_data)
-            }
     print("Beginning training.")
     model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,
-                           num_epochs)
+                           num_epochs, start_epoch)
