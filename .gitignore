@@ -10,3 +10,9 @@ Working through torchvision-model usage\.ipynb
 \.ipynb_checkpoints/Working through torchvision-model usage-checkpoint\.ipynb
 
 *.JPEG
+
+*.mat
+
+*.m
+
+*.pt
