@@ -305,6 +305,19 @@ def flatten_image_directory():
                 copyfile(os.path.join(base_directory,subdir,file),os.path.join(test_directory,file))
         print("Subdirectory copied.")
 
+def load_bbox_mat():
+    import scipy.io as sio
+    temp = sio.loadmat("/media/worklab/data_HDD/cv_data/images/data_stanford_cars/labels/cars_test_annos.mat",byte_order = "=")
+    temp2 = temp['annotations']
+    temp3 = temp2[0]
+    bbox_idxs = np.zeros([len(temp3),4])
+    for i,item in enumerate(temp3):
+        item = item.item()
+        bbox_idxs[i][0] = item[0][0][0]
+        bbox_idxs[i][1] = item[1][0][0]
+        bbox_idxs[i][2] = item[2][0][0]
+        bbox_idxs[i][3] = item[3][0][0]
+    np.save("outfile.npy".bbox_idxs)
 
 #------------------------------ Main code here -------------------------------#
 if __name__ == "__main__":
@@ -327,9 +340,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 6}
-    num_epochs = 50
+    num_epochs = 3
     
-    checkpoint_file = "checkpoint_5.pt"
+    checkpoint_file = "checkpoint_2.pt"
     
     # create dataloaders
     pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"

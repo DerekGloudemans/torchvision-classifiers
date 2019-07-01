@@ -16,3 +16,7 @@ Working through torchvision-model usage\.ipynb
 *.m
 
 *.pt
+
+data_stanford_cars/labels/README\.txt
+
+data_stanford_cars/labels/train_perfect_preds\.txt
