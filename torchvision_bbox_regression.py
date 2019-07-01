@@ -48,7 +48,9 @@ class Train_Dataset(data.Dataset):
         # use os module to get a list of positive and negative training examples
         # note that shuffling is essential because examples are in order
         pos_list =  [positives_path+'/train/'+f for f in os.listdir(positives_path+ '/train/')]
+        pos_list.sort()
         neg_list =  [negatives_path+'/train/'+f for f in os.listdir(negatives_path+ '/train/')]
+        neg_list.sort()
         self.file_list = pos_list + neg_list
 
         # load labels (first 4 are bbox coors, then class (1 for positive, 0 for negative)
@@ -88,37 +90,47 @@ def random_transforms(im,y,imsize = 224):
     Performs transforms that affect both X and y, as the transforms package 
     of torchvision doesn't do this elegantly
     inputs: im - image
-            y  - 1 x 5 numpy array of bbox corners and class
+            y  - 1 x 5 numpy array of bbox corners and class. the order is: 
+                min x, max x, min y, max y
     outputs: im - transformed image
              y  - 1 x 5 numpy array of bbox corners and class
     """
     
     #define parameters for random transform
-    scale = random.random()*0.5+ imsize/min(im.size) # verfify that scale will at least accomodate crop size
+    scale = random.random()*1 + 0.5*imsize/min(im.size) # verfify that scale will at least accomodate crop size
     shear = (random.random()-0.5)*30 #angle
     rotation = (random.random()-0.5) * 60.0 #angle
     
     
-    # define image transformation matrix
+    # image transformation matrix
     M = np.array([[scale*np.cos(rotation),      -np.sin(rotation+shear),0], 
                   [      np.sin(rotation), scale*np.cos(rotation+shear),0], 
                   [0,0,1]])
     
+    # only transform coordinates for positive examples (negatives are [0,0,0,0,0])
+    # clockwise from top left corner
+    if y[4] == 1:
+        corners = np.array([[y[0],y[2]],[y[0],y[3]],[y[2],y[3]],[y[2],y[1]]])
+        #TODO: transform points
+    
     # transform matrix
     im = transforms.functional.affine(im,rotation,(0,0),scale,shear)
-    # get crop location with normal distribution at image center
-    crop_x = int(random.gauss(im.size[1]/2,20/scale)-imsize/2)
-    crop_y = int(random.gauss(im.size[0]/2,20/scale)-imsize/2)
-    pad = 50
-    if crop_x < pad:
-        crop_x = im.size[1]/2 - imsize/2 # center
-    if crop_y < pad:
-        crop_y = im.size[0]/2 - imsize/2 # center
-    if crop_x > im.size[1] - imsize - pad:
-        crop_x = im.size[1]/2 - imsize/2 # center
-    if crop_y > im.size[0] - imsize - pad:
-        crop_y = im.size[0]/2 - imsize/2 # center  
-    im = transforms.functional.crop(im,crop_x,crop_y,imsize,imsize)
+    
+    
+    
+#    # get crop location with normal distribution at image center
+#    crop_x = int(random.gauss(im.size[1]/2,20/scale)-imsize/2)
+#    crop_y = int(random.gauss(im.size[0]/2,20/scale)-imsize/2)
+#    pad = 50
+#    if crop_x < pad:
+#        crop_x = im.size[1]/2 - imsize/2 # center
+#    if crop_y < pad:
+#        crop_y = im.size[0]/2 - imsize/2 # center
+#    if crop_x > im.size[1] - imsize - pad:
+#        crop_x = im.size[1]/2 - imsize/2 # center
+#    if crop_y > im.size[0] - imsize - pad:
+#        crop_y = im.size[0]/2 - imsize/2 # center  
+#    im = transforms.functional.crop(im,crop_x,crop_y,imsize,imsize)
     
     return im
     
@@ -210,3 +222,4 @@ if __name__ == "__main__":
     
     im2 = random_transforms(im,y)
     plt.imshow(im2)
+    #new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),1)
