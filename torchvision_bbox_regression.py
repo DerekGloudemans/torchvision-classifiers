@@ -36,6 +36,7 @@ import _pickle as pickle
 import random
 import copy
 import matplotlib.pyplot as plt
+import math
 
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset(data.Dataset):
@@ -85,39 +86,65 @@ class Train_Dataset(data.Dataset):
         return im, y
 
 
-def random_transforms(im,y,imsize = 224):
+def random_transforms(im,y,imsize = 224,tighten = 0.05):
     """
     Performs transforms that affect both X and y, as the transforms package 
     of torchvision doesn't do this elegantly
     inputs: im - image
-            y  - 1 x 5 numpy array of bbox corners and class. the order is: 
-                min x, max x, min y, max y
+             y  - 1 x 5 numpy array of bbox corners and class. the order is: 
+                min x, min y, max x max y
     outputs: im - transformed image
              y  - 1 x 5 numpy array of bbox corners and class
     """
     
     #define parameters for random transform
     scale = random.random()*1 + 0.5*imsize/min(im.size) # verfify that scale will at least accomodate crop size
-    shear = (random.random()-0.5)*30 #angle
+    shear = 0#(random.random()-0.5)*30 #angle
     rotation = (random.random()-0.5) * 60.0 #angle
     
+    # transform matrix
+    im = transforms.functional.affine(im,rotation,(0,0),scale,shear)
+    (xsize,ysize) = im.size
     
+
     # image transformation matrix
-    M = np.array([[scale*np.cos(rotation),      -np.sin(rotation+shear),0], 
-                  [      np.sin(rotation), scale*np.cos(rotation+shear),0], 
-                  [0,0,1]])
+    shear = math.radians(-shear)
+    rotation = math.radians(-rotation)
+    M = np.array([[scale*np.cos(rotation),-scale*np.sin(rotation+shear)], 
+                  [scale*np.sin(rotation), scale*np.cos(rotation+shear)]])
     
     # only transform coordinates for positive examples (negatives are [0,0,0,0,0])
     # clockwise from top left corner
     if y[4] == 1:
-        corners = np.array([[y[0],y[2]],[y[0],y[3]],[y[2],y[3]],[y[2],y[1]]])
-        #TODO: transform points
-    
-    # transform matrix
-    im = transforms.functional.affine(im,rotation,(0,0),scale,shear)
-    
-    
-    
+        # add 5th point corresponding to image center
+        corners = np.array([[y[0],y[1]],[y[2],y[1]],[y[2],y[3]],[y[0],y[3]],[int(xsize/2),int(ysize/2)]])
+        new_corners = np.matmul(corners,M)
+        
+        # Resulting corners make a skewed, tilted rectangle - realign with axes
+        y = np.ones(5)
+        y[0] = np.min(new_corners[:4,0])
+        y[1] = np.min(new_corners[:4,1])
+        y[2] = np.max(new_corners[:4,0])
+        y[3] = np.max(new_corners[:4,1])
+        
+        # shift so transformed image center aligns with original image center
+        xshift = xsize/2 - new_corners[4,0]
+        yshift = ysize/2 - new_corners[4,1]
+        y[0] = y[0] + xshift
+        y[1] = y[1] + yshift
+        y[2] = y[2] + xshift
+        y[3] = y[3] + yshift
+        y = y.astype(int)
+        
+        # brings bboxes in slightly on positive examples
+        if tighten != 0 and y[4] == 1:
+            xdiff = y[2] - y[0]
+            ydiff = y[3] - y[1]
+            y[0] = y[0] + xdiff*tighten
+            y[1] = y[1] + ydiff*tighten
+            y[2] = y[2] - xdiff*tighten
+            y[3] = y[3] - ydiff*tighten
+        
 #    # get crop location with normal distribution at image center
 #    crop_x = int(random.gauss(im.size[1]/2,20/scale)-imsize/2)
 #    crop_y = int(random.gauss(im.size[0]/2,20/scale)-imsize/2)
@@ -132,7 +159,7 @@ def random_transforms(im,y,imsize = 224):
 #        crop_y = im.size[0]/2 - imsize/2 # center  
 #    im = transforms.functional.crop(im,crop_x,crop_y,imsize,imsize)
     
-    return im
+    return im,y,new_corners.astype(int)
     
 # will need to be redefined
 def show_output(model,loader):
@@ -220,6 +247,10 @@ if __name__ == "__main__":
     #testloader = data.DataLoader(test_data, **params)
     print("Dataloaders created.")
     
-    im2 = random_transforms(im,y)
-    plt.imshow(im2)
-    #new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),1)
+    im , yin = train_data[8]
+    im2, y ,corners = random_transforms(im,yin,tighten = 0.05)
+    im_array = np.array(im2)
+    new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),3)
+    for item in corners:
+        new_im = cv2.circle(new_im,(item[0],item[1]),10,(0,255,0),-1)
+    plt.imshow(new_im)
