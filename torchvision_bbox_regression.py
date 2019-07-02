@@ -219,6 +219,109 @@ def load_bbox_mat():
         bbox_idxs[i][3] = item[3][0][0]
     np.save("outfile.npy".bbox_idxs)
 
+
+class Test_Dataset(data.Dataset):
+    """
+    Defines dataset and transforms for training data. The positive images and 
+    negative images are stored in two different directories
+    """
+    def __init__(self, positives_path,negatives_path):
+
+        # use os module to get a list of positive and negative training examples
+        # note that shuffling is essential because examples are in order
+        pos_list =  [positives_path+'/test/'+f for f in os.listdir(positives_path+ '/test/')]
+        pos_list.sort()
+        neg_list =  [negatives_path+'/test/'+f for f in os.listdir(negatives_path+ '/test/')]
+        neg_list.sort() # in case not all files were correctly downloaded
+        self.file_list = pos_list + neg_list
+
+        # load labels (first 4 are bbox coors, then class (1 for positive, 0 for negative)
+        pos_labels = np.load(positives_path+'/labels/test_bboxes.npy')
+        pos_labels = pos_labels[:len(pos_list)]
+        neg_labels = np.load(negatives_path+'/labels/test_bboxes.npy')
+        self.labels = np.concatenate((pos_labels,neg_labels),0)
+        
+        self.transforms = transforms.Compose([\
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+    
+    def __len__(self):
+        #Denotes the total number of samples
+        return len(self.file_list) 
+
+    def __getitem__(self, index):
+        #Generates one sample of data
+        file_name = self.file_list[index]
+        im = Image.open(file_name).convert('RGB')
+        y = self.labels[index,:]
+        
+        # transform, normalize and convert to tensor
+        im,y = self.scale_crop(im,y,imsize = 224)
+        X = self.transforms(im)
+        
+        return X, y
+    
+    
+    def scale_crop(self,im,y,imsize = 224):
+        """
+        center-crop image and adjust labels accordingly
+        """
+    
+        #define parameters for random transform
+        # verfify that scale will at least accomodate crop size
+        scale = imsize / max(im.size)
+        
+        # transform matrix
+        im = transforms.functional.affine(im,0,(0,0),scale,0)
+        (xsize,ysize) = im.size
+        
+        # only transform coordinates for positive examples (negatives are [0,0,0,0,0])
+        # clockwise from top left corner
+        if y[4] == 1:
+            
+            # image transformation matrix
+            M = np.array([[scale,scale], 
+                          [scale,scale]])
+    
+            # add 5th point corresponding to image center
+            corners = np.array([[y[0],y[1]],[y[2],y[1]],[y[2],y[3]],[y[0],y[3]],[int(xsize/2),int(ysize/2)]])
+            new_corners = corners * scale
+            
+            # realign with axes
+            y = np.ones(5)
+            y[0] = np.min(new_corners[:4,0])
+            y[1] = np.min(new_corners[:4,1])
+            y[2] = np.max(new_corners[:4,0])
+            y[3] = np.max(new_corners[:4,1])
+            
+            # shift so transformed image center aligns with original image center
+            xshift = xsize/2 - new_corners[4,0]
+            yshift = ysize/2 - new_corners[4,1]
+            y[0] = y[0] + xshift
+            y[1] = y[1] + yshift
+            y[2] = y[2] + xshift
+            y[3] = y[3] + yshift
+            y = y.astype(int)
+            
+            
+        # crop at image center
+        crop_x = xsize/2 -imsize/2
+        crop_y = ysize/2 -imsize/2
+        im = transforms.functional.crop(im,crop_y,crop_x,imsize,imsize)
+        
+        # transform bbox points into cropped coords
+        if y[4] == 1:
+            y[0] = y[0] - crop_x
+            y[1] = y[1] - crop_y
+            y[2] = y[2] - crop_x
+            y[3] = y[3] - crop_y
+        
+        return im,y
+    
+    
+
+
 #------------------------------ Main code here -------------------------------#
 if __name__ == "__main__":
     try:
@@ -248,17 +351,17 @@ if __name__ == "__main__":
     pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"
     neg_path = "/media/worklab/data_HDD/cv_data/images/data_imagenet_loader"
     train_data = Train_Dataset(pos_path,neg_path)
-    #test_data = Test_Dataset(pos_path,neg_path)
+    test_data = Test_Dataset(pos_path,neg_path)
     trainloader = data.DataLoader(train_data, **params)
-    #testloader = data.DataLoader(test_data, **params)
+    testloader = data.DataLoader(test_data, **params)
     print("Dataloaders created.")
     
     
-    
-#    im , yin = train_data[9]
-#    im2, y,cropx,cropy= random_transforms(im,yin,tighten = 0)
-#    im_array = np.array(im2)
-#    new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),3)
-#    plt.imshow(new_im)
-##    im_array = cv2.circle(np.array(im),(int(cropx),int(cropy)),10,(255,0,0),-1)
-##    plt.imshow(im_array)
+    xd = random.randint(0,6000)
+    im , yin = test_data[xd]
+#    im2,y = scale_crop(im,yin,imsize = 224)
+    im_array = np.array(im2)
+    new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),3)
+    plt.imshow(new_im)
+#    im_array = cv2.circle(np.array(im),(int(cropx),int(cropy)),10,(255,0,0),-1)
+#    plt.imshow(im_array)
