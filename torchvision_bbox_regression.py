@@ -98,8 +98,8 @@ def random_transforms(im,y,imsize = 224,tighten = 0.05):
     """
     
     #define parameters for random transform
-    scale = random.random()*1 + 0.5*imsize/min(im.size) # verfify that scale will at least accomodate crop size
-    shear = 0#(random.random()-0.5)*30 #angle
+    scale = min(2.5,max(random.gauss(0.5,1),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
+    shear = (random.random()-0.5)*30 #angle
     rotation = (random.random()-0.5) * 60.0 #angle
     
     # transform matrix
@@ -145,21 +145,30 @@ def random_transforms(im,y,imsize = 224,tighten = 0.05):
             y[2] = y[2] - xdiff*tighten
             y[3] = y[3] - ydiff*tighten
         
-#    # get crop location with normal distribution at image center
-#    crop_x = int(random.gauss(im.size[1]/2,20/scale)-imsize/2)
-#    crop_y = int(random.gauss(im.size[0]/2,20/scale)-imsize/2)
-#    pad = 50
-#    if crop_x < pad:
-#        crop_x = im.size[1]/2 - imsize/2 # center
-#    if crop_y < pad:
-#        crop_y = im.size[0]/2 - imsize/2 # center
-#    if crop_x > im.size[1] - imsize - pad:
-#        crop_x = im.size[1]/2 - imsize/2 # center
-#    if crop_y > im.size[0] - imsize - pad:
-#        crop_y = im.size[0]/2 - imsize/2 # center  
-#    im = transforms.functional.crop(im,crop_x,crop_y,imsize,imsize)
+    # get crop location with normal distribution at image center
+    crop_x = int(random.gauss(im.size[0]/2,xsize/10/scale)-imsize/2)
+    crop_y = int(random.gauss(im.size[1]/2,ysize/10/scale)-imsize/2)
     
-    return im,y,new_corners.astype(int)
+    # move crop if too close to edge
+    pad = 50
+    if crop_x < pad:
+        crop_x = im.size[0]/2 - imsize/2 # center
+    if crop_y < pad:
+        crop_y = im.size[1]/2 - imsize/2 # center
+    if crop_x > im.size[0] - imsize - pad:
+        crop_x = im.size[0]/2 - imsize/2 # center
+    if crop_y > im.size[0] - imsize - pad:
+        crop_y = im.size[0]/2 - imsize/2 # center  
+    im = transforms.functional.crop(im,crop_y,crop_x,imsize,imsize)
+    
+    # transform bbox points into cropped coords
+    if y[4] == 1:
+        y[0] = y[0] - crop_x
+        y[1] = y[1] - crop_y
+        y[2] = y[2] - crop_x
+        y[3] = y[3] - crop_y
+    
+    return im,y,crop_x,crop_y
     
 # will need to be redefined
 def show_output(model,loader):
@@ -247,10 +256,10 @@ if __name__ == "__main__":
     #testloader = data.DataLoader(test_data, **params)
     print("Dataloaders created.")
     
-    im , yin = train_data[8]
-    im2, y ,corners = random_transforms(im,yin,tighten = 0.05)
+    im , yin = train_data[9]
+    im2, y,cropx,cropy= random_transforms(im,yin,tighten = 0)
     im_array = np.array(im2)
     new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),3)
-    for item in corners:
-        new_im = cv2.circle(new_im,(item[0],item[1]),10,(0,255,0),-1)
     plt.imshow(new_im)
+#    im_array = cv2.circle(np.array(im),(int(cropx),int(cropy)),10,(255,0,0),-1)
+#    plt.imshow(im_array)
