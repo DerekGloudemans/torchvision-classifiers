@@ -60,10 +60,6 @@ class Train_Dataset(data.Dataset):
         self.labels = np.concatenate((pos_labels,neg_labels),0)
         
         self.transforms = transforms.Compose([\
-        transforms.RandomRotation(90),
-        transforms.RandomAffine(20),
-        transforms.RandomResizedCrop(224),
-        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
@@ -78,97 +74,98 @@ class Train_Dataset(data.Dataset):
         
         im = Image.open(file_name).convert('RGB')
         y = self.labels[index,:]
-        #im, y = random_transforms(im,y)
         
-        # normalize and convert to 
-        #X = self.transforms(im)
+        # transform, normalize and convert to tensor
+        im,y = self.random_affine_crop(im,y,imsize = 224, tighten = 0.05)
+        X = self.transforms(im)
         
-        return im, y
-
-
-def random_transforms(im,y,imsize = 224,tighten = 0.05):
-    """
-    Performs transforms that affect both X and y, as the transforms package 
-    of torchvision doesn't do this elegantly
-    inputs: im - image
-             y  - 1 x 5 numpy array of bbox corners and class. the order is: 
-                min x, min y, max x max y
-    outputs: im - transformed image
-             y  - 1 x 5 numpy array of bbox corners and class
-    """
+        return X, y
     
-    #define parameters for random transform
-    scale = min(2.5,max(random.gauss(0.5,1),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
-    shear = (random.random()-0.5)*30 #angle
-    rotation = (random.random()-0.5) * 60.0 #angle
+    def random_affine_crop(self,im,y,imsize = 224,tighten = 0.05):
+        """
+        Performs transforms that affect both X and y, as the transforms package 
+        of torchvision doesn't do this elegantly
+        inputs: im - image
+                 y  - 1 x 5 numpy array of bbox corners and class. the order is: 
+                    min x, min y, max x max y
+        outputs: im - transformed image
+                 y  - 1 x 5 numpy array of bbox corners and class
+        """
     
-    # transform matrix
-    im = transforms.functional.affine(im,rotation,(0,0),scale,shear)
-    (xsize,ysize) = im.size
-    
-
-    # image transformation matrix
-    shear = math.radians(-shear)
-    rotation = math.radians(-rotation)
-    M = np.array([[scale*np.cos(rotation),-scale*np.sin(rotation+shear)], 
-                  [scale*np.sin(rotation), scale*np.cos(rotation+shear)]])
-    
-    # only transform coordinates for positive examples (negatives are [0,0,0,0,0])
-    # clockwise from top left corner
-    if y[4] == 1:
-        # add 5th point corresponding to image center
-        corners = np.array([[y[0],y[1]],[y[2],y[1]],[y[2],y[3]],[y[0],y[3]],[int(xsize/2),int(ysize/2)]])
-        new_corners = np.matmul(corners,M)
+        #define parameters for random transform
+        scale = min(2.5,max(random.gauss(0.5,1),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
+        shear = (random.random()-0.5)*30 #angle
+        rotation = (random.random()-0.5) * 60.0 #angle
         
-        # Resulting corners make a skewed, tilted rectangle - realign with axes
-        y = np.ones(5)
-        y[0] = np.min(new_corners[:4,0])
-        y[1] = np.min(new_corners[:4,1])
-        y[2] = np.max(new_corners[:4,0])
-        y[3] = np.max(new_corners[:4,1])
+        # transform matrix
+        im = transforms.functional.affine(im,rotation,(0,0),scale,shear)
+        (xsize,ysize) = im.size
         
-        # shift so transformed image center aligns with original image center
-        xshift = xsize/2 - new_corners[4,0]
-        yshift = ysize/2 - new_corners[4,1]
-        y[0] = y[0] + xshift
-        y[1] = y[1] + yshift
-        y[2] = y[2] + xshift
-        y[3] = y[3] + yshift
-        y = y.astype(int)
+        # only transform coordinates for positive examples (negatives are [0,0,0,0,0])
+        # clockwise from top left corner
+        if y[4] == 1:
+            
+            # image transformation matrix
+            shear = math.radians(-shear)
+            rotation = math.radians(-rotation)
+            M = np.array([[scale*np.cos(rotation),-scale*np.sin(rotation+shear)], 
+                          [scale*np.sin(rotation), scale*np.cos(rotation+shear)]])
+            
+            
+            # add 5th point corresponding to image center
+            corners = np.array([[y[0],y[1]],[y[2],y[1]],[y[2],y[3]],[y[0],y[3]],[int(xsize/2),int(ysize/2)]])
+            new_corners = np.matmul(corners,M)
+            
+            # Resulting corners make a skewed, tilted rectangle - realign with axes
+            y = np.ones(5)
+            y[0] = np.min(new_corners[:4,0])
+            y[1] = np.min(new_corners[:4,1])
+            y[2] = np.max(new_corners[:4,0])
+            y[3] = np.max(new_corners[:4,1])
+            
+            # shift so transformed image center aligns with original image center
+            xshift = xsize/2 - new_corners[4,0]
+            yshift = ysize/2 - new_corners[4,1]
+            y[0] = y[0] + xshift
+            y[1] = y[1] + yshift
+            y[2] = y[2] + xshift
+            y[3] = y[3] + yshift
+            y = y.astype(int)
+            
+            # brings bboxes in slightly on positive examples
+            if tighten != 0:
+                xdiff = y[2] - y[0]
+                ydiff = y[3] - y[1]
+                y[0] = y[0] + xdiff*tighten
+                y[1] = y[1] + ydiff*tighten
+                y[2] = y[2] - xdiff*tighten
+                y[3] = y[3] - ydiff*tighten
+            
+        # get crop location with normal distribution at image center
+        crop_x = int(random.gauss(im.size[0]/2,xsize/10/scale)-imsize/2)
+        crop_y = int(random.gauss(im.size[1]/2,ysize/10/scale)-imsize/2)
         
-        # brings bboxes in slightly on positive examples
-        if tighten != 0 and y[4] == 1:
-            xdiff = y[2] - y[0]
-            ydiff = y[3] - y[1]
-            y[0] = y[0] + xdiff*tighten
-            y[1] = y[1] + ydiff*tighten
-            y[2] = y[2] - xdiff*tighten
-            y[3] = y[3] - ydiff*tighten
+        # move crop if too close to edge
+        pad = 50
+        if crop_x < pad:
+            crop_x = im.size[0]/2 - imsize/2 # center
+        if crop_y < pad:
+            crop_y = im.size[1]/2 - imsize/2 # center
+        if crop_x > im.size[0] - imsize - pad:
+            crop_x = im.size[0]/2 - imsize/2 # center
+        if crop_y > im.size[0] - imsize - pad:
+            crop_y = im.size[0]/2 - imsize/2 # center  
+        im = transforms.functional.crop(im,crop_y,crop_x,imsize,imsize)
         
-    # get crop location with normal distribution at image center
-    crop_x = int(random.gauss(im.size[0]/2,xsize/10/scale)-imsize/2)
-    crop_y = int(random.gauss(im.size[1]/2,ysize/10/scale)-imsize/2)
+        # transform bbox points into cropped coords
+        if y[4] == 1:
+            y[0] = y[0] - crop_x
+            y[1] = y[1] - crop_y
+            y[2] = y[2] - crop_x
+            y[3] = y[3] - crop_y
+        
+        return im,y
     
-    # move crop if too close to edge
-    pad = 50
-    if crop_x < pad:
-        crop_x = im.size[0]/2 - imsize/2 # center
-    if crop_y < pad:
-        crop_y = im.size[1]/2 - imsize/2 # center
-    if crop_x > im.size[0] - imsize - pad:
-        crop_x = im.size[0]/2 - imsize/2 # center
-    if crop_y > im.size[0] - imsize - pad:
-        crop_y = im.size[0]/2 - imsize/2 # center  
-    im = transforms.functional.crop(im,crop_y,crop_x,imsize,imsize)
-    
-    # transform bbox points into cropped coords
-    if y[4] == 1:
-        y[0] = y[0] - crop_x
-        y[1] = y[1] - crop_y
-        y[2] = y[2] - crop_x
-        y[3] = y[3] - crop_y
-    
-    return im,y,crop_x,crop_y
     
 # will need to be redefined
 def show_output(model,loader):
@@ -256,10 +253,12 @@ if __name__ == "__main__":
     #testloader = data.DataLoader(test_data, **params)
     print("Dataloaders created.")
     
-    im , yin = train_data[9]
-    im2, y,cropx,cropy= random_transforms(im,yin,tighten = 0)
-    im_array = np.array(im2)
-    new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),3)
-    plt.imshow(new_im)
-#    im_array = cv2.circle(np.array(im),(int(cropx),int(cropy)),10,(255,0,0),-1)
-#    plt.imshow(im_array)
+    
+    
+#    im , yin = train_data[9]
+#    im2, y,cropx,cropy= random_transforms(im,yin,tighten = 0)
+#    im_array = np.array(im2)
+#    new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),3)
+#    plt.imshow(new_im)
+##    im_array = cv2.circle(np.array(im),(int(cropx),int(cropy)),10,(255,0,0),-1)
+##    plt.imshow(im_array)
