@@ -166,46 +166,25 @@ class Train_Dataset(data.Dataset):
         
         return im,y
     
-    
-# will need to be redefined
-def show_output(model,loader):
-    batch,labels = next(iter(loader))
-    batch = batch.to(device)
-    
-    out = model(batch)
-    _,preds = torch.max(out,1)
-    
-    batch = batch.to('cpu')
-    preds = preds.to('cpu')
-    
-    # define figure subplot grid
-    batch_size = loader.batch_size
-    fig, axs = plt.subplots((batch_size+7)//8, 8, constrained_layout=True)
-    
-    # for image in batch, put image and associated label in grid
-    for i in range(0,batch_size):
-        im =  batch[i].numpy().transpose((1,2,0))
+    def show(self, index):
+        #Generates one sample of data
+        file_name = self.file_list[index]
         
-        mean = np.array([0.485, 0.456, 0.406])
-        std = np.array([0.229, 0.224, 0.225])
-        im = std * im + mean
-        im = np.clip(im, 0, 1)
+        im = Image.open(file_name).convert('RGB')
+        y = self.labels[index,:]
         
-        if preds[i] == 1:
-            label = "pred: car"
-        else:
-            label = "pred: non-car"
-        
-        axs[i//8,i%8].imshow(im)
-        axs[i//8,i%8].set_title(label)
-        axs[i//8,i%8].set_xticks([])
-        axs[i//8,i%8].set_yticks([])
-        
-        plt.pause(0.0001)
-
+        # transform, normalize and convert to tensor
+        im,y = self.random_affine_crop(im,y,imsize = 224, tighten = 0.05)
+        im_array = np.array(im)
+        new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(10,230,160),2)
+        plt.imshow(new_im)
+    
 
 
 def load_bbox_mat():
+    """
+    Used to parse raw annotation files into numpy arrays.
+    """
     import scipy.io as sio
     temp = sio.loadmat("/media/worklab/data_HDD/cv_data/images/data_stanford_cars/labels/cars_test_annos.mat",byte_order = "=")
     temp2 = temp['annotations']
@@ -232,7 +211,7 @@ class Test_Dataset(data.Dataset):
         pos_list =  [positives_path+'/test/'+f for f in os.listdir(positives_path+ '/test/')]
         pos_list.sort()
         neg_list =  [negatives_path+'/test/'+f for f in os.listdir(negatives_path+ '/test/')]
-        neg_list.sort() # in case not all files were correctly downloaded
+        neg_list.sort() # in case not all files were correctly downloaded; in this case, the .tar file didn't download completely
         self.file_list = pos_list + neg_list
 
         # load labels (first 4 are bbox coors, then class (1 for positive, 0 for negative)
@@ -319,7 +298,18 @@ class Test_Dataset(data.Dataset):
         
         return im,y
     
-    
+    def show(self, index):
+        #Generates one sample of data
+        file_name = self.file_list[index]
+        
+        im = Image.open(file_name).convert('RGB')
+        y = self.labels[index,:]
+        
+        # transform, normalize and convert to tensor
+        im,y = self.scale_crop(im,y,imsize = 224)
+        im_array = np.array(im)
+        new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(20,190,210),2)
+        plt.imshow(new_im)
 
 
 #------------------------------ Main code here -------------------------------#
@@ -356,12 +346,3 @@ if __name__ == "__main__":
     testloader = data.DataLoader(test_data, **params)
     print("Dataloaders created.")
     
-    
-    xd = random.randint(0,6000)
-    im , yin = test_data[xd]
-#    im2,y = scale_crop(im,yin,imsize = 224)
-    im_array = np.array(im2)
-    new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(255,0,0),3)
-    plt.imshow(new_im)
-#    im_array = cv2.circle(np.array(im),(int(cropx),int(cropy)),10,(255,0,0),-1)
-#    plt.imshow(im_array)
