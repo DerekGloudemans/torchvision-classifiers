@@ -373,7 +373,7 @@ if __name__ == "__main__":
     
    
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
         model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,

@@ -79,6 +79,13 @@ class Train_Dataset(data.Dataset):
         im,y = self.random_affine_crop(im,y,imsize = 224, tighten = 0.05)
         X = self.transforms(im)
         
+        # normalize y wrt image size and convert to tensor
+        y[0] = float(y[0])/im.size[0]
+        y[1] = float(y[1])/im.size[1]
+        y[2] = float(y[2])/im.size[0]
+        y[3] = float(y[3])/im.size[1]
+        y = torch.from_numpy(y).float()
+        
         return X, y
     
     def random_affine_crop(self,im,y,imsize = 224,tighten = 0.05):
@@ -238,6 +245,13 @@ class Test_Dataset(data.Dataset):
         im,y = self.scale_crop(im,y,imsize = 224)
         X = self.transforms(im)
         
+        # normalize y wrt image size and convert to tensor
+        y[0] = float(y[0])/im.size[0]
+        y[1] = float(y[1])/im.size[1]
+        y[2] = float(y[2])/im.size[0]
+        y[3] = float(y[3])/im.size[1]
+        y = torch.from_numpy(y).float()
+        
         return X, y
     
     
@@ -257,10 +271,6 @@ class Test_Dataset(data.Dataset):
         # only transform coordinates for positive examples (negatives are [0,0,0,0,0])
         # clockwise from top left corner
         if y[4] == 1:
-            
-            # image transformation matrix
-            M = np.array([[scale,scale], 
-                          [scale,scale]])
     
             # add 5th point corresponding to image center
             corners = np.array([[y[0],y[1]],[y[2],y[1]],[y[2],y[3]],[y[0],y[3]],[int(xsize/2),int(ysize/2)]])
@@ -362,7 +372,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
                 model.train()  # Set model to training mode
             else:
                 model.eval()   # Set model to evaluate mode
-
+            print("1")
             running_loss = 0.0
             running_corrects = 0
 
@@ -371,7 +381,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
             for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
                 labels = labels.to(device)
-
+                print("2")
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
@@ -379,22 +389,25 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     outputs = model(inputs)
-                    _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels)
-
+                    print(3)
                     # backward + optimize only if in training phase
                     if phase == 'train':
                         loss.backward()
                         optimizer.step()
-
+                print("4")
                 # statistics
                 running_loss += loss.item() * inputs.size(0)
-                # here we need to define a function that checks the bbox iou with correct
-                #running_corrects += torch.sum(preds == labels.data)
-                
+                # here we need to define a function that checks the bbox iou with correct 
+                # still wrong - must be across whole batch
+                pred = outputs.data()
+                actual = labels.data()
+                correct,_ = score_pred(pred,actual)
+                running_corrects += correct
+                print("5")
                 # verbose update
                 count += 1
-                if count % 100 == 0:
+                if count % 10 == 0:
                     print("on minibatch {}".format(count))
                     
             epoch_loss = running_loss / dataset_sizes[phase]
@@ -491,9 +504,9 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()
     
     # create training params
-    params = {'batch_size': 32,
+    params = {'batch_size': 1,
               'shuffle': True,
-              'num_workers': 6}
+              'num_workers': 0}
     num_epochs = 3
     
     checkpoint_file = None
@@ -544,7 +557,7 @@ if __name__ == "__main__":
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
         model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,
