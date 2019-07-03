@@ -400,8 +400,10 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
                 running_loss += loss.item() * inputs.size(0)
                 # here we need to define a function that checks the bbox iou with correct 
                 # still wrong - must be across whole batch
-                pred = outputs.data()
-                actual = labels.data()
+                
+                # copy data to cpu and numpy arrays for scoring
+                pred = outputs.data.cpu().numpy()
+                actual = labels.cpu().numpy()
                 correct,_ = score_pred(pred,actual)
                 running_corrects += correct
                 print("5")
@@ -443,46 +445,53 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
     return model
 
 
-def score_pred(pred,actual):
+def score_pred(preds,actuals):
     """
     returns two scoring metrics - classification correctness and bbox iou (for positive examples only)
-    pred,actual - 1x5 numpy arrays (minx, miny, maxx, maxy, class) for each
+    preds,actuals - Bx5 numpy arrays (minx, miny, maxx, maxy, class) for each
+    where B = batch size
     correct - int {0,1}
     bbox_acc - float in range [0,1]
     """
-    
-    # get class from regression value
-    actual[4] = np.round(actual[4])
-    pred[4] = np.round(pred[4])
-    
-    # for negative examples
-    if actual[4] == 0:
-        if pred[4] == 0:
-            correct = 1
-            bbox_acc = 1
-        else:
-            correct = 0
-            bbox_acc = 0
+    correct_sum = 0
+    bbox_accs = 0
+    for i, pred in enumerate(preds):
+        actual = actuals[i]
+        # get class from regression value
+        actual[4] = np.round(actual[4])
+        pred[4] = np.round(pred[4])
         
-    else:
-        if pred[4] == 0:
-            correct = 0
-            bbox_acc = 0
+        # for negative examples
+        if actual[4] == 0:
+            if pred[4] == 0:
+                correct = 1
+                bbox_acc = 1
+            else:
+                correct = 0
+                bbox_acc = 0
+            
         else:
-            # get intersection bounds
-            minx = max(actual[0],pred[0])
-            miny = max(actual[1],pred[1])
-            maxx = min(actual[2],pred[2])
-            maxy = min(actual[3],pred[3])
-            intersection = (maxx-minx)*(maxy-miny)
-            
-            a1 = (actual[2]-actual[0]) * (actual[3]-actual[1])
-            a2 = (pred[2]-pred[0]) * (pred[3] - pred[1])
-            union = a1+a2-intersection
-            
-            correct = 1
-            bbox_acc = intersection/union
-            
+            if pred[4] == 0:
+                correct = 0
+                bbox_acc = 0
+            else:
+                # get intersection bounds
+                minx = max(actual[0],pred[0])
+                miny = max(actual[1],pred[1])
+                maxx = min(actual[2],pred[2])
+                maxy = min(actual[3],pred[3])
+                intersection = (maxx-minx)*(maxy-miny)
+                
+                a1 = (actual[2]-actual[0]) * (actual[3]-actual[1])
+                a2 = (pred[2]-pred[0]) * (pred[3] - pred[1])
+                union = a1+a2-intersection
+                
+                correct = 1
+                bbox_acc = intersection/union
+        bbox_accs = bbox_accs + bbox_acc
+        correct_sum = correct_sum + correct
+    
+    bbox_accs = bbox_accs/float(len(preds))
     return correct,bbox_acc
 
 
@@ -504,9 +513,9 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()
     
     # create training params
-    params = {'batch_size': 1,
+    params = {'batch_size': 32,
               'shuffle': True,
-              'num_workers': 0}
+              'num_workers': 6}
     num_epochs = 3
     
     checkpoint_file = None
