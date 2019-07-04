@@ -78,12 +78,12 @@ class Train_Dataset(data.Dataset):
         # transform, normalize and convert to tensor
         im,y = self.random_affine_crop(im,y,imsize = 224, tighten = 0.05)
         X = self.transforms(im)
-        
         # normalize y wrt image size and convert to tensor
-        y[0] = float(y[0])/im.size[0]
-        y[1] = float(y[1])/im.size[1]
-        y[2] = float(y[2])/im.size[0]
-        y[3] = float(y[3])/im.size[1]
+        # pad to 5 times image size because bbox may fall outside of visible coordinates
+        y[0] = (y[0]+im.size[0]*2)/(im.size[0]*4)
+        y[1] = (y[1]+im.size[1]*2)/(im.size[1]*4)
+        y[2] = (y[2]+im.size[0]*2)/(im.size[0]*4)
+        y[3] = (y[3]+im.size[1]*2)/(im.size[1]*4)
         y = torch.from_numpy(y).float()
         
         return X, y
@@ -137,7 +137,6 @@ class Train_Dataset(data.Dataset):
             y[1] = y[1] + yshift
             y[2] = y[2] + xshift
             y[3] = y[3] + yshift
-            y = y.astype(int)
             
             # brings bboxes in slightly on positive examples
             if tighten != 0:
@@ -246,10 +245,10 @@ class Test_Dataset(data.Dataset):
         X = self.transforms(im)
         
         # normalize y wrt image size and convert to tensor
-        y[0] = float(y[0])/im.size[0]
-        y[1] = float(y[1])/im.size[1]
-        y[2] = float(y[2])/im.size[0]
-        y[3] = float(y[3])/im.size[1]
+        y[0] = (y[0]+im.size[0]*5)/(im.size[0]*10)
+        y[1] = (y[1]+im.size[1]*5)/(im.size[1]*10)
+        y[2] = (y[2]+im.size[0]*5)/(im.size[0]*10)
+        y[3] = (y[3]+im.size[1]*5)/(im.size[1]*10)
         y = torch.from_numpy(y).float()
         
         return X, y
@@ -362,7 +361,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
     for epoch in range(start_epoch,num_epochs):
-        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+        print('Epoch {}/{}'.format(epoch+1, num_epochs))
         print('-' * 10)
 
         # Each epoch has a training and validation phase
@@ -372,7 +371,6 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
                 model.train()  # Set model to training mode
             else:
                 model.eval()   # Set model to evaluate mode
-            print("1")
             running_loss = 0.0
             running_corrects = 0
 
@@ -381,21 +379,20 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
             for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
                 labels = labels.to(device)
-                print("2")
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    outputs = model(inputs)
+                    outputs = (model(inputs))
                     loss = criterion(outputs, labels)
-                    print(3)
+            
                     # backward + optimize only if in training phase
                     if phase == 'train':
                         loss.backward()
                         optimizer.step()
-                print("4")
+          
                 # statistics
                 running_loss += loss.item() * inputs.size(0)
                 # here we need to define a function that checks the bbox iou with correct 
@@ -404,16 +401,17 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
                 # copy data to cpu and numpy arrays for scoring
                 pred = outputs.data.cpu().numpy()
                 actual = labels.cpu().numpy()
-                correct,_ = score_pred(pred,actual)
+                correct,bbox_acc = score_pred(pred,actual)
                 running_corrects += correct
-                print("5")
+    
                 # verbose update
                 count += 1
                 if count % 10 == 0:
-                    print("on minibatch {}".format(count))
+                    print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
                     
             epoch_loss = running_loss / dataset_sizes[phase]
-            epoch_acc = running_corrects.double() / dataset_sizes[phase]
+            epoch_acc = float(running_corrects) / dataset_sizes[phase] * dataloaders['train'].batch_size
+            
 
             print('{} Loss: {:.4f} Acc: {:.4f}'.format(
                 phase, epoch_loss, epoch_acc))
@@ -455,6 +453,7 @@ def score_pred(preds,actuals):
     """
     correct_sum = 0
     bbox_accs = 0
+    box_count = 0
     for i, pred in enumerate(preds):
         actual = actuals[i]
         # get class from regression value
@@ -465,7 +464,7 @@ def score_pred(preds,actuals):
         if actual[4] == 0:
             if pred[4] == 0:
                 correct = 1
-                bbox_acc = 1
+                bbox_acc = 0
             else:
                 correct = 0
                 bbox_acc = 0
@@ -488,11 +487,16 @@ def score_pred(preds,actuals):
                 
                 correct = 1
                 bbox_acc = intersection/union
+                box_count = box_count + 1
         bbox_accs = bbox_accs + bbox_acc
         correct_sum = correct_sum + correct
     
-    bbox_accs = bbox_accs/float(len(preds))
-    return correct,bbox_acc
+    if box_count > 0:
+        bbox_accs = bbox_accs/float(box_count) # only consider examples where bbox was predicted for positive
+    else:
+        bbox_accs = 0
+    correct_percent = correct_sum/float(len(preds))
+    return correct_percent,bbox_accs
 
 
 #------------------------------ Main code here -------------------------------#
@@ -507,6 +511,8 @@ if __name__ == "__main__":
     # for repeatability
     random.seed = 0
     
+#    del model, train_data,test_data,trainloader,testloader
+    
     # CUDA for PyTorch
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
@@ -515,16 +521,17 @@ if __name__ == "__main__":
     # create training params
     params = {'batch_size': 32,
               'shuffle': True,
-              'num_workers': 6}
+              'num_workers': 0}
     num_epochs = 3
     
     checkpoint_file = None
     
     # create dataloaders
     try:
-        print("Checked dataloaders.")
         trainloader
         testloader
+        print("Checked dataloaders.")
+        
     except NameError:   
         pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"
         neg_path = "/media/worklab/data_HDD/cv_data/images/data_imagenet_loader"
@@ -564,7 +571,8 @@ if __name__ == "__main__":
     # group dataloaders
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
-    
+    train_data[0]
+    train_data[1]
     
     if True:    
     # train model
