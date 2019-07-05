@@ -51,6 +51,7 @@ import numpy as np
 import _pickle as pickle
 import random
 import copy
+
 import matplotlib.pyplot as plt
 
 #--------------------------- Definitions section -----------------------------#
@@ -304,7 +305,7 @@ def flatten_image_directory():
             else:
                 copyfile(os.path.join(base_directory,subdir,file),os.path.join(test_directory,file))
         print("Subdirectory copied.")
-
+        
 
 #------------------------------ Main code here -------------------------------#
 if __name__ == "__main__":
@@ -327,9 +328,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 6}
-    num_epochs = 50
+    num_epochs = 3
     
-    checkpoint_file = "checkpoint_5.pt"
+    checkpoint_file = "checkpoint_2.pt"
     
     # create dataloaders
     pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"
