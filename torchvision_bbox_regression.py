@@ -245,10 +245,10 @@ class Test_Dataset(data.Dataset):
         X = self.transforms(im)
         
         # normalize y wrt image size and convert to tensor
-        y[0] = (y[0]+im.size[0]*5)/(im.size[0]*10)
-        y[1] = (y[1]+im.size[1]*5)/(im.size[1]*10)
-        y[2] = (y[2]+im.size[0]*5)/(im.size[0]*10)
-        y[3] = (y[3]+im.size[1]*5)/(im.size[1]*10)
+        y[0] = (y[0]+im.size[0]*2)/(im.size[0]*4)
+        y[1] = (y[1]+im.size[1]*2)/(im.size[1]*4)
+        y[2] = (y[2]+im.size[0]*2)/(im.size[0]*4)
+        y[3] = (y[3]+im.size[1]*2)/(im.size[1]*4)
         y = torch.from_numpy(y).float()
         
         return X, y
@@ -304,7 +304,7 @@ class Test_Dataset(data.Dataset):
             y[2] = y[2] - crop_x
             y[3] = y[3] - crop_y
         
-        return im,y
+        return im,y.astype(float)
     
     def show(self, index):
         #Generates one sample of data
@@ -385,7 +385,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    outputs = (model(inputs))
+                    outputs = F.relu(model(inputs))
                     loss = criterion(outputs, labels)
             
                     # backward + optimize only if in training phase
@@ -424,14 +424,15 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
 
         print()
         
-        # save checkpoint
-        PATH = "checkpoint_{}.pt".format(epoch)
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss
-            }, PATH)
+        if epoch % 3 == 0:
+            # save checkpoint
+            PATH = "checkpoint_{}.pt".format(epoch)
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': loss
+                }, PATH)
 
     time_elapsed = time.time() - start
     print('Training complete in {:.0f}m {:.0f}s'.format(
@@ -479,10 +480,12 @@ def score_pred(preds,actuals):
                 miny = max(actual[1],pred[1])
                 maxx = min(actual[2],pred[2])
                 maxy = min(actual[3],pred[3])
-                intersection = (maxx-minx)*(maxy-miny)
-                
+                intersection = max((maxx-minx)*(maxy-miny),0)
+
                 a1 = (actual[2]-actual[0]) * (actual[3]-actual[1])
+                assert a1 >= 0 , "A1 < 0"
                 a2 = (pred[2]-pred[0]) * (pred[3] - pred[1])
+                assert a2 >= 0, "A2 < 0"
                 union = a1+a2-intersection
                 
                 correct = 1
@@ -497,6 +500,51 @@ def score_pred(preds,actuals):
         bbox_accs = 0
     correct_percent = correct_sum/float(len(preds))
     return correct_percent,bbox_accs
+
+
+def plot_batch(model,loader):
+    batch,labels = next(iter(loader))
+    batch = batch.to(device)
+    
+        
+    out = F.relu(model(batch))
+    
+    batch = batch.data.cpu().numpy()
+    preds = out.data.cpu().numpy()
+    actuals = labels.data.cpu().numpy()
+    
+    # define figure subplot grid
+    batch_size = loader.batch_size
+    fig, axs = plt.subplots((batch_size+7)//8, 8, constrained_layout=True)
+    # for image in batch, put image and associated label in grid
+    for i in range(0,batch_size):
+        im =  batch[i].transpose((1,2,0))
+        pred = preds[i]
+        actual = actuals[i]
+        
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        im = std * im + mean
+        im = np.clip(im, 0, 1)
+        
+        if np.round(pred[4]) == 1:
+            label = "pred: car"
+        else:
+            label = "pred: non-car"
+        
+        # transform bbox coords back into im pixel coords
+        pred = (pred* 224*4 - 224*2).astype(int)
+        actual = (actual *224*4 - 224*2).astype(int)
+        # plot bboxes
+        im = cv2.rectangle(im,(actual[0],actual[1]),(actual[2],actual[3]),(0.9,0.2,0.2),2)
+        im = cv2.rectangle(im,(pred[0],pred[1]),(pred[2],pred[3]),(0.1,0.6,0.9),2)
+
+        
+        axs[i//8,i%8].imshow(im)
+        axs[i//8,i%8].set_title(label)
+        axs[i//8,i%8].set_xticks([])
+        axs[i//8,i%8].set_yticks([])
+        plt.pause(.0001)
 
 
 #------------------------------ Main code here -------------------------------#
@@ -522,9 +570,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 0}
-    num_epochs = 3
+    num_epochs = 30
     
-    checkpoint_file = None
+    checkpoint_file = 'checkpoints/checkpoint_good_classification_bad_bbox.pt'
     
     # create dataloaders
     try:
@@ -558,7 +606,7 @@ if __name__ == "__main__":
         optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
         
         # Decay LR by a factor of 0.1 every 7 epochs
-        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
         
         # define start epoch for consistent labeling if checkpoint is reloaded
         start_epoch = 0
@@ -571,11 +619,10 @@ if __name__ == "__main__":
     # group dataloaders
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
-    train_data[0]
-    train_data[1]
     
-    if True:    
+    if False:    
     # train model
         print("Beginning training.")
         model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,
                                num_epochs, start_epoch)
+    plot_batch(model,testloader)

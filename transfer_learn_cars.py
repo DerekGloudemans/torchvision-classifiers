@@ -51,6 +51,7 @@ import numpy as np
 import _pickle as pickle
 import random
 import copy
+
 import matplotlib.pyplot as plt
 
 #--------------------------- Definitions section -----------------------------#
@@ -373,7 +374,7 @@ if __name__ == "__main__":
     
    
     
-    if True:    
+    if False:    
     # train model
         print("Beginning training.")
         model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,
