@@ -422,6 +422,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     cls_outputs, reg_outputs = model(inputs)
+                    cls_outputs = torch.max(cls_outputs, 1) #get max class
                     cls_loss = cls_criterion(cls_outputs, labels[:,4,:,:])
                     reg_loss = reg_criterion(reg_outputs, labels[:,:4,:,:])
                     # backward + optimize only if in training phase
@@ -436,9 +437,11 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # still wrong - must be across whole batch
                 
                 # copy data to cpu and numpy arrays for scoring
-                pred = outputs.data.cpu().numpy()
+                cls_pred = cls_outputs.data.cpu().numpy()
+                reg_pred = reg_outputs.data.cpu().numpy()
                 actual = labels.cpu().numpy()
-                correct,bbox_acc = score_pred(pred,actual)
+                
+                correct,bbox_acc = score_pred(cls_pred,reg_pred,actual)
                 running_corrects += correct
     
                 # verbose update
@@ -481,7 +484,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
     return model
 
 
-def score_pred(preds,actuals):
+def score_pred(cls_preds,reg_preds,actuals):
     """
     returns two scoring metrics - classification correctness and bbox iou (for positive examples only)
     preds,actuals - Bx5 numpy arrays (minx, miny, maxx, maxy, class) for each
@@ -492,15 +495,16 @@ def score_pred(preds,actuals):
     correct_sum = 0
     bbox_accs = 0
     box_count = 0
-    for i, pred in enumerate(preds):
+    for i, cls_pred in enumerate(cls_preds):
         actual = actuals[i]
+        bbox_pred = reg_preds[i]
+        
         # get class from regression value
         actual[4] = np.round(actual[4])
-        pred[4] = np.round(pred[4])
         
         # for negative examples
         if actual[4] == 0:
-            if pred[4] == 0:
+            if cls_pred[4] == 0:
                 correct = 1
                 bbox_acc = 0
             else:
@@ -508,20 +512,20 @@ def score_pred(preds,actuals):
                 bbox_acc = 0
             
         else:
-            if pred[4] == 0:
+            if cls_pred[4] == 0:
                 correct = 0
                 bbox_acc = 0
             else:
                 # get intersection bounds
-                minx = max(actual[0],pred[0])
-                miny = max(actual[1],pred[1])
-                maxx = min(actual[2],pred[2])
-                maxy = min(actual[3],pred[3])
+                minx = max(actual[0],bbox_pred[0])
+                miny = max(actual[1],bbox_pred[1])
+                maxx = min(actual[2],bbox_pred[2])
+                maxy = min(actual[3],bbox_pred[3])
                 intersection = max((maxx-minx)*(maxy-miny),0)
 
                 a1 = (actual[2]-actual[0]) * (actual[3]-actual[1])
                 assert a1 >= 0 , "A1 < 0"
-                a2 = (pred[2]-pred[0]) * (pred[3] - pred[1])
+                a2 = (bbox_pred[2]-bbox_pred[0]) * (bbox_pred[3] - bbox_pred[1])
                 assert a2 >= 0, "A2 < 0"
                 union = a1+a2-intersection
                 
