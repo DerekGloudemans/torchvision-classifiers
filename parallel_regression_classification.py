@@ -424,9 +424,16 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 with torch.set_grad_enabled(phase == 'train'):
                     cls_outputs, reg_outputs = model(inputs)
                     
-                    # note that the classification loss is done using class-wise probs rather than a single class label?
+                    # make copy of reg_outputs and zero if target is 0
+                    # so that bboxes are only learned for positive examples
+                    temp = cls_target.unsqueeze(1)
+                    temp2 = torch.cat((temp,temp,temp,temp),1).float()
+                    reg_outputs_mod = torch.mul(reg_outputs,temp2)
+                    
+                    # note that the classification loss is done using class-wise probs rather 
+                    # than a single class label?
                     cls_loss = cls_criterion(cls_outputs,cls_target)
-                    reg_loss = reg_criterion(reg_outputs,reg_target)
+                    reg_loss = reg_criterion(reg_outputs_mod,reg_target)
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
@@ -622,7 +629,7 @@ if __name__ == "__main__":
               'num_workers': 0}
     num_epochs = 30
     
-    checkpoint_file = 'checkpoints/checkpoint_3.pt'
+    checkpoint_file = None# 'checkpoints/checkpoint_3.pt'
     
     # create dataloaders
     try:
