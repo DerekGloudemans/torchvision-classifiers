@@ -423,8 +423,8 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     cls_outputs, reg_outputs = model(inputs)
-                    #_ , cls_outputs = torch.max(cls_outputs, 1) #get max class 
-
+                    
+                    # note that the classification loss is done using class-wise probs rather than a single class label?
                     cls_loss = cls_criterion(cls_outputs,cls_target)
                     reg_loss = reg_criterion(reg_outputs,reg_target)
                     
@@ -439,10 +439,13 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # here we need to define a function that checks the bbox iou with correct 
                 # still wrong - must be across whole batch
                 
+                # convert into class label rather than probs
+                _,cls_outputs = torch.max(cls_outputs,1)
                 # copy data to cpu and numpy arrays for scoring
                 cls_pred = cls_outputs.data.cpu().numpy()
                 reg_pred = reg_outputs.data.cpu().numpy()
-                actual = labels.cpu().numpy()
+                actual = labels.numpy()
+                
                 
                 correct,bbox_acc = score_pred(cls_pred,reg_pred,actual)
                 running_corrects += correct
@@ -500,14 +503,14 @@ def score_pred(cls_preds,reg_preds,actuals):
     box_count = 0
     for i, cls_pred in enumerate(cls_preds):
         actual = actuals[i]
-        bbox_pred = reg_preds[i]
+        bbox_pred = reg_preds[i,:]
         
         # get class from regression value
         actual[4] = np.round(actual[4])
         
         # for negative examples
         if actual[4] == 0:
-            if cls_pred[4] == 0:
+            if cls_pred == 0:
                 correct = 1
                 bbox_acc = 0
             else:
@@ -515,26 +518,26 @@ def score_pred(cls_preds,reg_preds,actuals):
                 bbox_acc = 0
             
         else:
-            if cls_pred[4] == 0:
+            if cls_pred == 0:
                 correct = 0
                 bbox_acc = 0
             else:
+                correct = 1
+                box_count = box_count + 1
                 # get intersection bounds
                 minx = max(actual[0],bbox_pred[0])
                 miny = max(actual[1],bbox_pred[1])
                 maxx = min(actual[2],bbox_pred[2])
                 maxy = min(actual[3],bbox_pred[3])
-                intersection = max((maxx-minx)*(maxy-miny),0)
-
-                a1 = (actual[2]-actual[0]) * (actual[3]-actual[1])
-                assert a1 >= 0 , "A1 < 0"
-                a2 = (bbox_pred[2]-bbox_pred[0]) * (bbox_pred[3] - bbox_pred[1])
-                assert a2 >= 0, "A2 < 0"
-                union = a1+a2-intersection
-                
-                correct = 1
-                bbox_acc = intersection/union
-                box_count = box_count + 1
+                if minx > maxx or miny > maxy:
+                    bbox_acc = 0
+                else:  
+                    intersection = (maxx-minx)*(maxy-miny)
+                    a1 = (actual[2]-actual[0]) * (actual[3]-actual[1])
+                    a2 = (bbox_pred[2]-bbox_pred[0]) * (bbox_pred[3] - bbox_pred[1])
+                    union = a1+a2-intersection
+                    bbox_acc = intersection/union
+                        
         bbox_accs = bbox_accs + bbox_acc
         correct_sum = correct_sum + correct
     
@@ -542,7 +545,7 @@ def score_pred(cls_preds,reg_preds,actuals):
         bbox_accs = bbox_accs/float(box_count) # only consider examples where bbox was predicted for positive
     else:
         bbox_accs = 0
-    correct_percent = correct_sum/float(len(preds))
+    correct_percent = correct_sum/float(len(cls_preds))
     return correct_percent,bbox_accs
 
 
@@ -551,10 +554,12 @@ def plot_batch(model,loader):
     batch = batch.to(device)
     
         
-    out = F.relu(model(batch))
-    
+    cls_out, reg_out = model(batch)
+    _, cls_out = torch.max(cls_out,1)
+     
     batch = batch.data.cpu().numpy()
-    preds = out.data.cpu().numpy()
+    bboxes = reg_out.data.cpu().numpy()
+    preds = cls_out.data.cpu().numpy()
     actuals = labels.data.cpu().numpy()
     
     # define figure subplot grid
@@ -564,6 +569,7 @@ def plot_batch(model,loader):
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
         pred = preds[i]
+        bbox = bboxes[i]
         actual = actuals[i]
         
         mean = np.array([0.485, 0.456, 0.406])
@@ -571,17 +577,17 @@ def plot_batch(model,loader):
         im = std * im + mean
         im = np.clip(im, 0, 1)
         
-        if np.round(pred[4]) == 1:
+        if np.round(pred) == 1:
             label = "pred: car"
         else:
             label = "pred: non-car"
         
         # transform bbox coords back into im pixel coords
-        pred = (pred* 224*4 - 224*2).astype(int)
+        bbox = (bbox* 224*4 - 224*2).astype(int)
         actual = (actual *224*4 - 224*2).astype(int)
         # plot bboxes
         im = cv2.rectangle(im,(actual[0],actual[1]),(actual[2],actual[3]),(0.9,0.2,0.2),2)
-        im = cv2.rectangle(im,(pred[0],pred[1]),(pred[2],pred[3]),(0.1,0.6,0.9),2)
+        im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
 
         
         axs[i//8,i%8].imshow(im)
@@ -616,7 +622,7 @@ if __name__ == "__main__":
               'num_workers': 0}
     num_epochs = 30
     
-    checkpoint_file = None #'checkpoints/checkpoint_good_classification_bad_bbox.pt'
+    checkpoint_file = 'checkpoints/checkpoint_3.pt'
     
     # create dataloaders
     try:
