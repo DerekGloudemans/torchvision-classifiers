@@ -320,23 +320,58 @@ class Test_Dataset(data.Dataset):
         plt.imshow(new_im)
 
 
-def make_model():
+class SplitNet(nn.Module):
     """
-    Loads pretrained torchvision model and redefines fc layer for car regression
+    Defines a new network structure with vgg19 feature extraction and two parallel 
+    fully connected layer sequences, one for classification and one for regression
     """
-    # uses about 1 GiB of GPU memory
-    model = models.vgg19(pretrained = True)
-    #model = models.resnet50(pretrained = True)
-    in_feat_num = model.classifier[3].in_features
-    mid_feat_num = int(np.sqrt(in_feat_num))
-    out_feat_num = 5
     
-    # redefine the last two layers of the classifier for car classification
-    model.classifier[3] = nn.Linear(in_feat_num,mid_feat_num)
-    model.classifier[6] = nn.Linear(mid_feat_num, out_feat_num)
-    
-    return model
+    def __init__(self):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(SplitNet, self).__init__()
+        
+        # remove last layers of vgg19 model, save first fc layer and maxpool layer
+        self.vgg = models.vgg19(pretrained=True)
+        del self.vgg.classifier[2:]
 
+        # get size of some layers
+        start_num = self.vgg.classifier[0].out_features
+        mid_num = int(np.sqrt(start_num))
+        cls_out_num = 2 # car or non-car (for now)
+        reg_out_num = 4 # bounding box coords
+        
+        # define classifier
+        self.classifier = nn.Sequential(
+                          nn.Linear(start_num,mid_num,bias=True),
+                          nn.ReLU(),
+                          nn.Linear(mid_num,cls_out_num,bias = True),
+                          nn.Softmax()
+                          )
+        
+        # define regressor
+        self.regressor = nn.Sequential(
+                          nn.Linear(start_num,mid_num,bias=True),
+                          nn.ReLU(),
+                          nn.Linear(mid_num,reg_out_num,bias = True),
+                          nn.ReLU()
+                          )
+
+    def forward(self, x):
+        """
+        In the forward function we accept a Tensor of input data and we must return
+        a Tensor of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Tensors.
+        """
+        vgg_out = self.vgg(x)
+        cls_out = self.classifier(vgg_out)
+        reg_out = self.regressor(vgg_out)
+        #out = torch.cat((cls_out, reg_out), 0) # might be the wrong dimension
+        
+        return cls_out,reg_out
+   
 
 def load_model(checkpoint_file,model,optimizer):
     """
@@ -351,7 +386,8 @@ def load_model(checkpoint_file,model,optimizer):
     return model,optimizer,epoch
 
 
-def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_sizes, num_epochs=5, start_epoch = 0):
+def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler, 
+                dataloaders,dataset_sizes, num_epochs=5, start_epoch = 0):
     """
     Alternates between a training step and a validation step at each epoch. 
     Validation results are reported but don't impact model weights
@@ -385,16 +421,17 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders,dataset_size
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    outputs = F.relu(model(inputs))
-                    loss = criterion(outputs, labels)
-            
+                    cls_outputs, reg_outputs = model(inputs)
+                    cls_loss = cls_criterion(cls_outputs, labels[:,4,:,:])
+                    reg_loss = reg_criterion(reg_outputs, labels[:,:4,:,:])
                     # backward + optimize only if in training phase
                     if phase == 'train':
-                        loss.backward()
+                        reg_loss.backward()
+                        cls_loss.backward()
                         optimizer.step()
           
                 # statistics
-                running_loss += loss.item() * inputs.size(0)
+                running_loss += (reg_loss.item()+cls_loss.item()) * inputs.size(0)
                 # here we need to define a function that checks the bbox iou with correct 
                 # still wrong - must be across whole batch
                 
@@ -572,7 +609,7 @@ if __name__ == "__main__":
               'num_workers': 0}
     num_epochs = 30
     
-    checkpoint_file = 'checkpoints/checkpoint_good_classification_bad_bbox.pt'
+    checkpoint_file = None #'checkpoints/checkpoint_good_classification_bad_bbox.pt'
     
     # create dataloaders
     try:
@@ -596,12 +633,14 @@ if __name__ == "__main__":
     except NameError:
         
         # define CNN model
-        model = make_model()
+        model = SplitNet()
         model = model.to(device)
         print("Got model.")
         
-        # define loss function
-        criterion = nn.MSELoss()
+        # define loss functions
+        reg_criterion = nn.MSELoss()
+        cls_criterion = nn.CrossEntropyLoss()
+        
         # all parameters are being optimized, not just fc layer
         optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
         
@@ -623,6 +662,7 @@ if __name__ == "__main__":
     if False:    
     # train model
         print("Beginning training.")
-        model = train_model(model, criterion, optimizer, exp_lr_scheduler, dataloaders,datasizes,
-                               num_epochs, start_epoch)
-    plot_batch(model,testloader)
+        model = train_model(model, reg_criterion, cls_criterion, optimizer, 
+                            exp_lr_scheduler, dataloaders,datasizes,
+                            num_epochs, start_epoch)
+    #plot_batch(model,testloader)
