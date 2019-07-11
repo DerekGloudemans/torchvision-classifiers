@@ -348,7 +348,7 @@ class SplitNet(nn.Module):
                           nn.Linear(start_num,mid_num,bias=True),
                           nn.ReLU(),
                           nn.Linear(mid_num,cls_out_num,bias = True),
-                          nn.Softmax()
+                          nn.Softmax(dim = 1)
                           )
         
         # define regressor
@@ -414,7 +414,8 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
             count = 0
             for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
-                labels = labels.to(device)
+                reg_target = labels[:,:4].to(device)
+                cls_target = labels[:,4].long().to(device)
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
@@ -422,12 +423,14 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     cls_outputs, reg_outputs = model(inputs)
-                    cls_outputs = torch.max(cls_outputs, 1) #get max class
-                    cls_loss = cls_criterion(cls_outputs, labels[:,4,:,:])
-                    reg_loss = reg_criterion(reg_outputs, labels[:,:4,:,:])
+                    #_ , cls_outputs = torch.max(cls_outputs, 1) #get max class 
+
+                    cls_loss = cls_criterion(cls_outputs,cls_target)
+                    reg_loss = reg_criterion(reg_outputs,reg_target)
+                    
                     # backward + optimize only if in training phase
                     if phase == 'train':
-                        reg_loss.backward()
+                        reg_loss.backward(retain_graph = True)
                         cls_loss.backward()
                         optimizer.step()
           
@@ -471,7 +474,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': loss
+                'loss': epoch_loss
                 }, PATH)
 
     time_elapsed = time.time() - start
@@ -663,10 +666,10 @@ if __name__ == "__main__":
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
-        model = train_model(model, reg_criterion, cls_criterion, optimizer, 
+        model = train_model(model, cls_criterion, reg_criterion, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     #plot_batch(model,testloader)
