@@ -44,8 +44,10 @@ class Train_Dataset(data.Dataset):
     Defines dataset and transforms for training data. The positive images and 
     negative images are stored in two different directories
     """
-    def __init__(self, positives_path,negatives_path):
+    def __init__(self, positives_path,negatives_path, max_scaling = 1.5):
 
+        self.max_scaling = max_scaling
+        
         # use os module to get a list of positive and negative training examples
         # note that shuffling is essential because examples are in order
         pos_list =  [positives_path+'/train/'+f for f in os.listdir(positives_path+ '/train/')]
@@ -100,7 +102,7 @@ class Train_Dataset(data.Dataset):
         """
     
         #define parameters for random transform
-        scale = min(2.5,max(random.gauss(0.5,1),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
+        scale = min(self.max_scaling,max(random.gauss(0.5,1),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
         shear = (random.random()-0.5)*30 #angle
         rotation = (random.random()-0.5) * 60.0 #angle
         
@@ -182,6 +184,7 @@ class Train_Dataset(data.Dataset):
         # transform, normalize and convert to tensor
         im,y = self.random_affine_crop(im,y,imsize = 224, tighten = 0.05)
         im_array = np.array(im)
+        y = y.astype(int)
         new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(10,230,160),2)
         plt.imshow(new_im)
     
@@ -210,7 +213,6 @@ class Test_Dataset(data.Dataset):
     negative images are stored in two different directories
     """
     def __init__(self, positives_path,negatives_path):
-
         # use os module to get a list of positive and negative training examples
         # note that shuffling is essential because examples are in order
         pos_list =  [positives_path+'/test/'+f for f in os.listdir(positives_path+ '/test/')]
@@ -403,7 +405,8 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
             if phase == 'train':
-                scheduler.step()
+                if True: #disable for Adam
+                    scheduler.step()
                 model.train()  # Set model to training mode
             else:
                 model.eval()   # Set model to evaluate mode
@@ -459,7 +462,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
     
                 # verbose update
                 count += 1
-                if count % 10 == 0:
+                if count % 100 == 0:
                     print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
                     
             epoch_loss = running_loss / dataset_sizes[phase]
@@ -627,9 +630,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 0}
-    num_epochs = 30
+    num_epochs = 50
     
-    checkpoint_file = None# 'checkpoints/checkpoint_3.pt'
+    checkpoint_file =  'checkpoints/7-11-2019/checkpoint_27.pt'
     
     # create dataloaders
     try:
@@ -640,7 +643,7 @@ if __name__ == "__main__":
     except NameError:   
         pos_path = "/media/worklab/data_HDD/cv_data/images/data_stanford_cars"
         neg_path = "/media/worklab/data_HDD/cv_data/images/data_imagenet_loader"
-        train_data = Train_Dataset(pos_path,neg_path)
+        train_data = Train_Dataset(pos_path,neg_path,max_scaling = 0.5)
         test_data = Test_Dataset(pos_path,neg_path)
         trainloader = data.DataLoader(train_data, **params)
         testloader = data.DataLoader(test_data, **params)
@@ -662,17 +665,18 @@ if __name__ == "__main__":
         cls_criterion = nn.CrossEntropyLoss()
         
         # all parameters are being optimized, not just fc layer
-        optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+        #optimizer = optim.Adam(model.parameters(), lr=0.001)
+        optimizer = optim.SGD(model.parameters(), lr=0.001,momentum = 0.9)
         
         # Decay LR by a factor of 0.1 every 7 epochs
-        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
         
         # define start epoch for consistent labeling if checkpoint is reloaded
-        start_epoch = 0
+        start_epoch = 27
     
         # if checkpoint specified, load model and optimizer weights from checkpoint
         if checkpoint_file != None:
-            model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
+            model,_,start_epoch = load_model(checkpoint_file, model, optimizer)
             print("Checkpoint loaded.")
             
     # group dataloaders
