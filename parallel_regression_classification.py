@@ -318,8 +318,10 @@ class Test_Dataset(data.Dataset):
         # transform, normalize and convert to tensor
         im,y = self.scale_crop(im,y,imsize = 224)
         im_array = np.array(im)
+        y = y.astype(int)
         new_im = cv2.rectangle(im_array,(y[0],y[1]),(y[2],y[3]),(20,190,210),2)
         plt.imshow(new_im)
+
 
 
 class SplitNet(nn.Module):
@@ -431,14 +433,15 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                     # so that bboxes are only learned for positive examples
                     temp = cls_target.unsqueeze(1)
                     mask = torch.cat((temp,temp,temp,temp),1).float()
+                    mask.requires_grad = True
                     reg_outputs_mod = torch.mul(reg_outputs,mask)
                     
                     # note that the classification loss is done using class-wise probs rather 
                     # than a single class label?
                     cls_loss = cls_criterion(cls_outputs,cls_target)
-                    reg_loss = reg_criterion(reg_outputs_mod,reg_target,mask)
+                    reg_loss = reg_criterion(reg_outputs_mod,reg_target,temp)
                     
-                    #print("cls: {}, reg: {}".format(cls_loss.item(),reg_loss.item()))
+                    
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
@@ -466,6 +469,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 count += 1
                 if count % 20 == 0:
                     print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
+                    print("cls: {}, reg: {}".format(cls_loss.item(),reg_loss.item()))
                     
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = float(running_corrects) / dataset_sizes[phase] * dataloaders['train'].batch_size
@@ -622,14 +626,19 @@ class Box_Loss(nn.Module):
         maxx,_ = torch.min(torch.cat((output[:,2].unsqueeze(1),target[:,2].unsqueeze(1)),1),1)
         maxy,_ = torch.min(torch.cat((output[:,3].unsqueeze(1),target[:,3].unsqueeze(1)),1),1)
 
-        intersection = torch.mul(maxx-minx,maxy-miny)
+        zeros = torch.zeros(minx.shape).unsqueeze(1).to(device)
+        delx,_ = torch.max(torch.cat(((maxx-minx).unsqueeze(1),zeros),1),1)
+        dely,_ = torch.max(torch.cat(((maxy-miny).unsqueeze(1),zeros),1),1)
+        intersection = torch.mul(delx,dely)
         a1 = torch.mul(output[:,2]-output[:,0],output[:,3]-output[:,1])
         a2 = torch.mul(target[:,2]-target[:,0],target[:,3]-target[:,1])
+        #a1,_ = torch.max(torch.cat((a1.unsqueeze(1),zeros),1),1)
+        #a2,_ = torch.max(torch.cat((a2.unsqueeze(1),zeros),1),1)
         union = a1 + a2 - intersection 
         iou = intersection / (union + epsilon)
-        iou = torch.clamp(iou,0)
+        #iou = torch.clamp(iou,0)
         mask_sum = mask.sum()
-        return 1- iou.sum()/mask_sum
+        return 1- iou.sum()/(mask_sum+epsilon)
 
 #------------------------------ Main code here -------------------------------#
 if __name__ == "__main__":
@@ -656,7 +665,7 @@ if __name__ == "__main__":
               'num_workers': 0}
     num_epochs = 200
     
-    checkpoint_file =  'checkpoints/7-12-2019/checkpoint_147.pt'
+    checkpoint_file =  None#'checkpoints/7-12-2019/checkpoint_147.pt'
     
     # create dataloaders
     try:
@@ -716,8 +725,8 @@ if __name__ == "__main__":
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     #plot_batch(model,testloader)
-#    loss = Box_Loss()
-#    batch,labels = next(iter(testloader))
-#    batch = batch.to(device)
-#    cls_outs, reg_out = model(batch)
-#    test = loss(reg_out,reg_out)
+    loss = Box_Loss()
+    batch,labels = next(iter(testloader))
+    batch = batch.to(device)
+    cls_outs, reg_out = model(batch)
+    test = loss(reg_out,reg_out,cls_outs)
