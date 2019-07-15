@@ -430,13 +430,15 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                     # make copy of reg_outputs and zero if target is 0
                     # so that bboxes are only learned for positive examples
                     temp = cls_target.unsqueeze(1)
-                    temp2 = torch.cat((temp,temp,temp,temp),1).float()
-                    reg_outputs_mod = torch.mul(reg_outputs,temp2)
+                    mask = torch.cat((temp,temp,temp,temp),1).float()
+                    reg_outputs_mod = torch.mul(reg_outputs,mask)
                     
                     # note that the classification loss is done using class-wise probs rather 
                     # than a single class label?
                     cls_loss = cls_criterion(cls_outputs,cls_target)
-                    reg_loss = reg_criterion(reg_outputs_mod,reg_target)
+                    reg_loss = reg_criterion(reg_outputs_mod,reg_target,mask)
+                    
+                    #print("cls: {}, reg: {}".format(cls_loss.item(),reg_loss.item()))
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
@@ -462,7 +464,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
     
                 # verbose update
                 count += 1
-                if count % 100 == 0:
+                if count % 20 == 0:
                     print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
                     
             epoch_loss = running_loss / dataset_sizes[phase]
@@ -564,8 +566,8 @@ def plot_batch(model,loader):
     batch = batch.to(device)
     
         
-    cls_out, reg_out = model(batch)
-    _, cls_out = torch.max(cls_out,1)
+    cls_outs, reg_out = model(batch)
+    _, cls_out = torch.max(cls_outs,1)
      
     batch = batch.data.cpu().numpy()
     bboxes = reg_out.data.cpu().numpy()
@@ -606,6 +608,28 @@ def plot_batch(model,loader):
         axs[i//8,i%8].set_yticks([])
         plt.pause(.0001)
 
+class Box_Loss(nn.Module):        
+    def __init__(self):
+        super(Box_Loss,self).__init__()
+        
+    def forward(self,output,target,mask,epsilon = 1e-07):
+        """ Compute the bbox iou loss for target vs output using tensors to preserve
+        gradients for efficient backpropogation"""
+        
+        # minx miny maxx maxy
+        minx,_ = torch.max(torch.cat((output[:,0].unsqueeze(1),target[:,0].unsqueeze(1)),1),1)
+        miny,_ = torch.max(torch.cat((output[:,1].unsqueeze(1),target[:,1].unsqueeze(1)),1),1)
+        maxx,_ = torch.min(torch.cat((output[:,2].unsqueeze(1),target[:,2].unsqueeze(1)),1),1)
+        maxy,_ = torch.min(torch.cat((output[:,3].unsqueeze(1),target[:,3].unsqueeze(1)),1),1)
+
+        intersection = torch.mul(maxx-minx,maxy-miny)
+        a1 = torch.mul(output[:,2]-output[:,0],output[:,3]-output[:,1])
+        a2 = torch.mul(target[:,2]-target[:,0],target[:,3]-target[:,1])
+        union = a1 + a2 - intersection 
+        iou = intersection / (union + epsilon)
+        iou = torch.clamp(iou,0)
+        mask_sum = mask.sum()
+        return 1- iou.sum()/mask_sum
 
 #------------------------------ Main code here -------------------------------#
 if __name__ == "__main__":
@@ -630,9 +654,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 0}
-    num_epochs = 50
+    num_epochs = 200
     
-    checkpoint_file =  'checkpoints/7-11-2019/checkpoint_27.pt'
+    checkpoint_file =  'checkpoints/7-12-2019/checkpoint_147.pt'
     
     # create dataloaders
     try:
@@ -661,7 +685,8 @@ if __name__ == "__main__":
         print("Got model.")
         
         # define loss functions
-        reg_criterion = nn.MSELoss()
+        #reg_criterion = nn.MSELoss()
+        reg_criterion = Box_Loss()
         cls_criterion = nn.CrossEntropyLoss()
         
         # all parameters are being optimized, not just fc layer
@@ -672,11 +697,12 @@ if __name__ == "__main__":
         exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
         
         # define start epoch for consistent labeling if checkpoint is reloaded
-        start_epoch = 27
+        start_epoch = 0
     
         # if checkpoint specified, load model and optimizer weights from checkpoint
         if checkpoint_file != None:
-            model,_,start_epoch = load_model(checkpoint_file, model, optimizer)
+            model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
+            #model,_,start_epoch = load_model(checkpoint_file, model, optimizer) # optimizer restarts from scratch
             print("Checkpoint loaded.")
             
     # group dataloaders
@@ -690,3 +716,8 @@ if __name__ == "__main__":
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     #plot_batch(model,testloader)
+#    loss = Box_Loss()
+#    batch,labels = next(iter(testloader))
+#    batch = batch.to(device)
+#    cls_outs, reg_out = model(batch)
+#    test = loss(reg_out,reg_out)
