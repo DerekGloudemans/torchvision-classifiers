@@ -565,7 +565,7 @@ def score_pred(cls_preds,reg_preds,actuals):
     return correct_percent,bbox_accs
 
 
-def plot_batch(model,loader):
+def plot_random_batch(model,loader):
     batch,labels = next(iter(loader))
     batch = batch.to(device)
     
@@ -603,6 +603,46 @@ def plot_batch(model,loader):
         actual = (actual *224*4 - 224*2).astype(int)
         # plot bboxes
         im = cv2.rectangle(im,(actual[0],actual[1]),(actual[2],actual[3]),(0.9,0.2,0.2),2)
+        im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
+
+        
+        axs[i//8,i%8].imshow(im)
+        axs[i//8,i%8].set_title(label)
+        axs[i//8,i%8].set_xticks([])
+        axs[i//8,i%8].set_yticks([])
+        plt.pause(.0001)
+
+def plot_batch(model,batch):
+        
+    cls_outs, reg_out = model(batch)
+    _, cls_out = torch.max(cls_outs,1)
+     
+    batch = batch.data.cpu().numpy()
+    bboxes = reg_out.data.cpu().numpy()
+    preds = cls_out.data.cpu().numpy()
+    
+    # define figure subplot grid
+    batch_size = len(preds)
+    fig, axs = plt.subplots((batch_size+7)//8, 8, constrained_layout=True)
+    # for image in batch, put image and associated label in grid
+    for i in range(0,batch_size):
+        im =  batch[i].transpose((1,2,0))
+        pred = preds[i]
+        bbox = bboxes[i]
+        
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        im = std * im + mean
+        im = np.clip(im, 0, 1)
+        
+        if np.round(pred) == 1:
+            label = "car: {:05.3f}".format(cls_outs[i,1])
+        else:
+            label = "non-car: {:05.3f}".format(cls_outs[i,0])
+        
+        # transform bbox coords back into im pixel coords
+        bbox = (bbox* 224*4 - 224*2).astype(int)
+        # plot bboxes
         im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
 
         
@@ -724,9 +764,17 @@ if __name__ == "__main__":
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
-    plot_batch(model,testloader)
-    loss = Box_Loss()
+        
+#    plot_random_batch(model,testloader)
+    
+    
     batch,labels = next(iter(testloader))
     batch = batch.to(device)
-    cls_outs, reg_out = model(batch)
-    test = loss(reg_out,reg_out,cls_outs)
+    plot_batch(model,batch)
+    
+    if False: #test loss function
+        loss = Box_Loss()
+        cls_outs, reg_out = model(batch)
+        test = loss(reg_out,reg_out,cls_outs)
+    
+    torch.cuda.empty_cache()
