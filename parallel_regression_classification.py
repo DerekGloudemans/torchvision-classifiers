@@ -665,7 +665,7 @@ if __name__ == "__main__":
               'num_workers': 0}
     num_epochs = 200
     
-    checkpoint_file =  None#'checkpoints/7-12-2019/checkpoint_147.pt'
+    checkpoint_file = "/home/worklab/Documents/Checkpoints/splitnet_checkpoint_12.pt"
     
     # create dataloaders
     try:
@@ -718,13 +718,13 @@ if __name__ == "__main__":
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    if True:    
+    if False:    
     # train model
         print("Beginning training.")
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
-    #plot_batch(model,testloader)
+    plot_batch(model,testloader)
     loss = Box_Loss()
     batch,labels = next(iter(testloader))
     batch = batch.to(device)
