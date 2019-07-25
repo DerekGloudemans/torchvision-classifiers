@@ -623,7 +623,8 @@ def plot_batch(model,batch):
     
     # define figure subplot grid
     batch_size = len(preds)
-    fig, axs = plt.subplots((batch_size+7)//8, 8, constrained_layout=True)
+    row_size = min(batch_size,8)
+    fig, axs = plt.subplots((batch_size+row_size-1)//row_size, row_size, constrained_layout=True)
     # for image in batch, put image and associated label in grid
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
@@ -645,12 +646,17 @@ def plot_batch(model,batch):
         # plot bboxes
         im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
 
-        
-        axs[i//8,i%8].imshow(im)
-        axs[i//8,i%8].set_title(label)
-        axs[i//8,i%8].set_xticks([])
-        axs[i//8,i%8].set_yticks([])
-        plt.pause(.0001)
+        if row_size <= 8:
+            axs[i].imshow(im)
+            axs[i].set_title(label)
+            axs[i].set_xticks([])
+            axs[i].set_yticks([])
+        else:
+            axs[i//row_size,i%row_size].imshow(im)
+            axs[i//row_size,i%row_size].set_title(label)
+            axs[i//row_size,i%row_size].set_xticks([])
+            axs[i//row_size,i%row_size].set_yticks([])
+            plt.pause(.0001)
 
 class Box_Loss(nn.Module):        
     def __init__(self):
