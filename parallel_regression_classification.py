@@ -82,10 +82,10 @@ class Train_Dataset(data.Dataset):
         X = self.transforms(im)
         # normalize y wrt image size and convert to tensor
         # pad to 5 times image size because bbox may fall outside of visible coordinates
-        y[0] = (y[0]+im.size[0]*2)/(im.size[0]*4)
-        y[1] = (y[1]+im.size[1]*2)/(im.size[1]*4)
-        y[2] = (y[2]+im.size[0]*2)/(im.size[0]*4)
-        y[3] = (y[3]+im.size[1]*2)/(im.size[1]*4)
+        y[0] = (y[0]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        y[1] = (y[1]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
+        y[2] = (y[2]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        y[3] = (y[3]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         y = torch.from_numpy(y).float()
         
         return X, y
@@ -247,10 +247,10 @@ class Test_Dataset(data.Dataset):
         X = self.transforms(im)
         
         # normalize y wrt image size and convert to tensor
-        y[0] = (y[0]+im.size[0]*2)/(im.size[0]*4)
-        y[1] = (y[1]+im.size[1]*2)/(im.size[1]*4)
-        y[2] = (y[2]+im.size[0]*2)/(im.size[0]*4)
-        y[3] = (y[3]+im.size[1]*2)/(im.size[1]*4)
+        y[0] = (y[0]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        y[1] = (y[1]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
+        y[2] = (y[2]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        y[3] = (y[3]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         y = torch.from_numpy(y).float()
         
         return X, y
@@ -488,7 +488,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         
         if epoch % 3 == 0:
             # save checkpoint
-            PATH = "checkpoint_{}.pt".format(epoch)
+            PATH = "splitnet_centered_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -599,8 +599,8 @@ def plot_random_batch(model,loader):
             label = "pred: non-car"
         
         # transform bbox coords back into im pixel coords
-        bbox = (bbox* 224*4 - 224*2).astype(int)
-        actual = (actual *224*4 - 224*2).astype(int)
+        bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
+        actual = (actual *224*wer - 224*(wer-1)/2).astype(int)
         # plot bboxes
         im = cv2.rectangle(im,(actual[0],actual[1]),(actual[2],actual[3]),(0.9,0.2,0.2),2)
         im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
@@ -642,11 +642,11 @@ def plot_batch(model,batch):
             label = "non-car: {:05.3f}".format(cls_outs[i,0])
         
         # transform bbox coords back into im pixel coords
-        bbox = (bbox* 224*4 - 224*2).astype(int)
+        bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
         # plot bboxes
         im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
 
-        if row_size <= 8:
+        if batch_size <= 8:
             axs[i].imshow(im)
             axs[i].set_title(label)
             axs[i].set_xticks([])
@@ -697,7 +697,8 @@ if __name__ == "__main__":
     
     # for repeatability
     random.seed = 0
-    
+    global wer #window expansion size, controls how far out of frame bbox can be predicted 
+    wer = 5
 #    del model, train_data,test_data,trainloader,testloader
     
     # CUDA for PyTorch
@@ -709,9 +710,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 0}
-    num_epochs = 200
+    num_epochs = 13
     
-    checkpoint_file = "/home/worklab/Documents/Checkpoints/splitnet_checkpoint_12.pt"
+    checkpoint_file = None# "/home/worklab/Documents/Checkpoints/splitnet_checkpoint_12.pt"
     
     # create dataloaders
     try:
@@ -764,7 +765,7 @@ if __name__ == "__main__":
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
