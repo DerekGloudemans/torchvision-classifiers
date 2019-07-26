@@ -710,9 +710,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 0}
-    num_epochs = 13
+    num_epochs = 20
     
-    checkpoint_file = None# "/home/worklab/Documents/Checkpoints/splitnet_checkpoint_12.pt"
+    checkpoint_file = "/home/worklab/Documents/Checkpoints/splitnet_centered5_checkpoint_13.pt"
     
     # create dataloaders
     try:
@@ -765,7 +765,7 @@ if __name__ == "__main__":
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    if True:    
+    if False:    
     # train model
         print("Beginning training.")
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
