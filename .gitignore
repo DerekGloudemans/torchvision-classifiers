@@ -20,3 +20,5 @@ Working through torchvision-model usage\.ipynb
 data_stanford_cars/labels/README\.txt
 
 data_stanford_cars/labels/train_perfect_preds\.txt
+
+__pycache__/parallel_regression_classification\.cpython-36\.pyc
