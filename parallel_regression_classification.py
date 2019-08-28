@@ -369,9 +369,15 @@ class SplitNet(nn.Module):
         a Tensor of output data. We can use Modules defined in the constructor as
         well as arbitrary operators on Tensors.
         """
+        start_time = time.time()
         vgg_out = self.vgg(x)
+        vgg_time = time.time() - start_time
         cls_out = self.classifier(vgg_out)
+        cls_time = time.time()-start_time - vgg_time
         reg_out = self.regressor(vgg_out)
+        reg_time = time.time() - start_time - vgg_time - cls_time
+        total_time = time.time() - start_time
+        print("vgg: {}, cls: {}, reg: {}".format(vgg_time/total_time, cls_time/total_time, reg_time/total_time))
         #out = torch.cat((cls_out, reg_out), 0) # might be the wrong dimension
         
         return cls_out,reg_out
