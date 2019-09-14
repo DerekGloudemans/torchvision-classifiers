@@ -62,7 +62,7 @@ class Train_Dataset_3D(data.Dataset):
     Defines dataset and transforms for training data. The positive images and 
     negative images are stored in two different directories
     """
-    def __init__(self,directory, max_scaling = 1.5):
+    def __init__(self,directory, max_scaling = 8):
 
         self.im_dir = os.path.join(directory,"images")
         self.max_scaling = max_scaling
@@ -150,7 +150,7 @@ class Train_Dataset_3D(data.Dataset):
         """
     
         #define parameters for random transform
-        scale = min(self.max_scaling,max(random.gauss(0.5,1),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
+        scale = min(self.max_scaling,max(random.gauss(1,0.5),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
         shear = 0 #(random.random()-0.5)*30 #angle
         rotation = (random.random()-0.5) * 60.0 #angle
         
@@ -228,19 +228,19 @@ class Train_Dataset_3D(data.Dataset):
         bbox_2d[3] = bbox_2d[3] - crop_y
         
         new_corners_3d[0,:] = new_corners_3d[0,:] - crop_x
-        new_corners_3d[0,:] = new_corners_3d[0,:] - crop_y
+        new_corners_3d[1,:] = new_corners_3d[1,:] - crop_y
         
         return im, bbox_2d, new_corners_3d
     
-    def show(self, index):
+    def show(self, index,plot_3D = False):
         #Generates one sample of data
         file_name = os.path.join(self.im_dir,self.images[index])
         
         # load relevant files
         im = Image.open(file_name).convert('RGB')
         y = self.labels[index]
-        bbox_2d = y['bbox_2d']
-        bbox_3d = y['bbox_3d']
+        bbox_2d = y['bbox2d']
+        bbox_3d = y['bbox3d']
         cls = y['class']
             
         cls = self.class_dict[cls.lower()]
@@ -249,9 +249,28 @@ class Train_Dataset_3D(data.Dataset):
         im,bbox_2d,bbox_3d = self.random_scale_crop(im,bbox_2d,bbox_3d,imsize = 224, tighten = 0)
         
         im_array = np.array(im)
-        bbox_2d = bbox_2d.astype(int)
         
-        new_im = cv2.rectangle(im_array,(bbox_2d[0],bbox_2d[1]),(bbox_2d[2],bbox_2d[3]),(10,230,160),2)
+        if plot_3D:
+            new_im = im_array.copy()
+            coords = np.transpose(bbox_3d).astype(int)
+            #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
+            edge_array= np.array([[0,1,0,1,1,0,0,0],
+                                  [1,0,1,0,0,1,0,0],
+                                  [0,1,0,1,0,0,1,1],
+                                  [1,0,1,0,0,0,1,1],
+                                  [1,0,0,0,0,1,0,1],
+                                  [0,1,0,0,1,0,1,0],
+                                  [0,0,1,0,0,1,0,1],
+                                  [0,0,0,1,1,0,1,0]])
+        
+            # plot lines between indicated corner points
+            for i in range(0,8):
+                for j in range(0,8):
+                    if edge_array[i,j] == 1:
+                        cv2.line(new_im,(coords[i,0],coords[i,1]),(coords[j,0],coords[j,1]),(10,230,160),1)
+        else:
+            bbox_2d = bbox_2d.astype(int)
+            new_im = cv2.rectangle(im_array,(bbox_2d[0],bbox_2d[1]),(bbox_2d[2],bbox_2d[3]),(10,230,160),2)
         
         plt.imshow(new_im)
 
@@ -393,6 +412,8 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()    
     
     directory = "C:\\Users\\derek\\Desktop\\KITTI\\3D_object_parsed"
-    train_data = Train_Dataset_3D(directory,max_scaling = 0.5)
+    train_data = Train_Dataset_3D(directory,max_scaling = 1.5)
 
-    X, (cls,bbox_2d,bbox_3d,calib) = train_data[0]
+    idx = random.randint(0,len(train_data))
+    X, (cls,bbox_2d,bbox_3d,calib) = train_data[idx]
+    train_data.show(idx,plot_3D = True)
