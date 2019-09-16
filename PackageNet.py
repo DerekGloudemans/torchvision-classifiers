@@ -70,6 +70,7 @@ class PackageNet(nn.Module):
                           )
         
         # define regressor
+        # try relu and tanh, also try without bias
         self.regressor = nn.Sequential(
                           nn.Linear(start_num,mid_num1,bias=True),
                           nn.Sigmoid(),

@@ -48,6 +48,7 @@ from scipy.ndimage import affine_transform
 # always good to have
 import time
 import os
+import sys
 import numpy as np    
 import _pickle as pickle
 import random
@@ -130,7 +131,7 @@ class Train_Dataset_3D(data.Dataset):
         bbox_3d = torch.from_numpy(np.reshape(bbox_3d,16)).float()
         
         calib = torch.from_numpy(calib).float()
-        cls = torch.Tensor([cls])
+        cls = torch.LongTensor([cls])
         # y is a tuple of four tensors: cls,2dbbox, 3dbbox, and camera calibration matrix
         y = (cls,bbox_2d,bbox_3d,calib)
         
@@ -325,9 +326,6 @@ class Test_Dataset_3D(data.Dataset):
         cls = y['class']
             
         cls = self.class_dict[cls.lower()]
-        temp = np.zeros([9])
-        temp[cls] = 1
-        cls = torch.from_numpy(temp).float()
         
         # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
         im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224)
@@ -484,7 +482,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         print('-' * 10)
 
         # Each epoch has a training and validation phase
-        for phase in ['train', 'val']:
+        for phase in ['train']:#, 'val']:
             if phase == 'train':
                 if True: #disable for Adam
                     scheduler.step()
@@ -517,15 +515,15 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 #                    
 #                    # note that the classification loss is done using class-wise probs rather 
 #                    # than a single class label?
-                    cls_loss = cls_criterion(cls_outputs,cls_target)
+                    cls_loss = cls_criterion(cls_outputs,cls_target.squeeze())
                     reg_loss = reg_criterion(reg_outputs,reg_target)
                     
                     
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
-                        reg_loss.backward(retain_graph = True)
-                        cls_loss.backward()
+                        #reg_loss.backward(retain_graph = True)
+                        reg_loss.backward()
                         optimizer.step()
           
                 # statistics
@@ -538,11 +536,11 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # copy data to cpu and numpy arrays for scoring
                 cls_pred = cls_outputs.data.cpu().numpy()
                 reg_pred = reg_outputs.data.cpu().numpy()
-                actual = labels.numpy()
+#                actual = labels.numpy()
                 
                 
 #                correct,bbox_acc = score_pred(cls_pred,reg_pred,actual)
-                running_corrects += correct
+#                running_corrects += correct
     
                 # verbose update
                 count += 1
@@ -551,17 +549,17 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                     print("cls: {}, reg: {}".format(cls_loss.item(),reg_loss.item()))
                     
             epoch_loss = running_loss / dataset_sizes[phase]
-            epoch_acc = float(running_corrects) / dataset_sizes[phase] * dataloaders['train'].batch_size
+#            epoch_acc = float(running_corrects) / dataset_sizes[phase] * dataloaders['train'].batch_size
             
 
-            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
-                phase, epoch_loss, epoch_acc))
-
-            # deep copy the model
-            if phase == 'val' and epoch_acc > best_acc:
-                best_acc = epoch_acc
-                del best_model_wts
-                best_model_wts = copy.deepcopy(model.state_dict())
+#            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
+#                phase, epoch_loss, epoch_acc))
+#
+#            # deep copy the model
+#            if phase == 'val' and epoch_acc > best_acc:
+#                best_acc = epoch_acc
+#                del best_model_wts
+#                best_model_wts = copy.deepcopy(model.state_dict())
 
         print()
         
@@ -586,7 +584,68 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 
 
 
+def plot_batch(model,batch):
+    batch = batch.to(device)
+    cls_outs, reg_out = model(batch)
+    _, cls_out = torch.max(cls_outs,1)
+     
+    batch = batch.data.cpu().numpy()
+    bboxes = reg_out.data.cpu().numpy()
+    print (bboxes)
+    preds = cls_out.data.cpu().numpy()
+    
+    # define figure subplot grid
+    batch_size = len(preds)
+    row_size = min(batch_size,8)
+    fig, axs = plt.subplots((batch_size+row_size-1)//row_size, row_size, constrained_layout=True)
+    # for image in batch, put image and associated label in grid
+    for i in range(0,batch_size):
+        im =  batch[i].transpose((1,2,0))
+        pred = preds[i]
+        bbox = bboxes[i].reshape(2,-1)
+        
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        im = std * im + mean
+        im = np.clip(im, 0, 1)
+        
+        label = pred
+        
+        # transform bbox coords back into im pixel coords
+        bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
+        # plot bboxes
+        
+        if True:
+            new_im = im
+            coords = np.transpose(bbox).astype(int)
+            #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
+            edge_array= np.array([[0,1,0,1,1,0,0,0],
+                                  [1,0,1,0,0,1,0,0],
+                                  [0,1,0,1,0,0,1,1],
+                                  [1,0,1,0,0,0,1,1],
+                                  [1,0,0,0,0,1,0,1],
+                                  [0,1,0,0,1,0,1,0],
+                                  [0,0,1,0,0,1,0,1],
+                                  [0,0,0,1,1,0,1,0]])
+        
+            # plot lines between indicated corner points
+            for i2 in range(0,8):
+                for j2 in range(0,8):
+                    if edge_array[i2,j2] == 1:
+                        cv2.line(new_im,(coords[i2,0],coords[i2,1]),(coords[j2,0],coords[j2,1]),(10,230,160),1)
+        
 
+        if batch_size <= 8:
+            axs[i].imshow(new_im)
+            axs[i].set_title(label)
+            axs[i].set_xticks([])
+            axs[i].set_yticks([])
+        else:
+            axs[i//row_size,i%row_size].imshow(new_im)
+            axs[i//row_size,i%row_size].set_title(label)
+            axs[i//row_size,i%row_size].set_xticks([])
+            axs[i//row_size,i%row_size].set_yticks([])
+            plt.pause(.0001)
 
 #------------------------------ Main code here -------------------------------#
 if __name__ == "__main__":
@@ -598,7 +657,7 @@ if __name__ == "__main__":
     # define start epoch for consistent labeling if checkpoint is reloaded
     checkpoint_file = None
     start_epoch = 0
-    num_epochs = 20
+    num_epochs = 4
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -607,7 +666,11 @@ if __name__ == "__main__":
     device = torch.device("cuda:0" if use_cuda else "cpu")
     torch.cuda.empty_cache()    
     
-    directory = "C:\\Users\\derek\\Desktop\\KITTI\\3D_object_parsed"
+    if sys.platform == 'linux':
+        directory =     new_dir =   "/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed"
+    else:
+        directory = "C:\\Users\\derek\\Desktop\\KITTI\\3D_object_parsed"
+        
     train_data = Train_Dataset_3D(directory,max_scaling = 1.5)
     test_data = Test_Dataset_3D(directory)
 
@@ -644,7 +707,7 @@ if __name__ == "__main__":
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.001,momentum = 0.9)
+    optimizer = optim.SGD(model.parameters(), lr=0.01,momentum = 0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
@@ -666,3 +729,5 @@ if __name__ == "__main__":
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
+    
+    plot_batch(model,next(iter(testloader))[0])
