@@ -58,7 +58,7 @@ class PackageNet(nn.Module):
         mid_num1 = int(start_num**0.667)
         mid_num2 = int(start_num**0.333)
         
-        cls_out_num = 9 # car or non-car (for now)
+        cls_out_num = 9 
         reg_out_num = 16 # 8 3D bounding box coords
         
         # define classifier
@@ -73,9 +73,9 @@ class PackageNet(nn.Module):
         # try relu and tanh, also try without bias
         self.regressor = nn.Sequential(
                           nn.Linear(start_num,mid_num1,bias=True),
-                          nn.Sigmoid(),
+                          nn.ReLU(),
                           nn.Linear(mid_num1,mid_num2,bias = True),
-                          nn.Sigmoid(),
+                          nn.ReLU(),
                           nn.Linear(mid_num2,reg_out_num,bias = True),
                           nn.Sigmoid()
                           

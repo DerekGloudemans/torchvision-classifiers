@@ -1,5 +1,4 @@
 """
-
 This file defines a network architecture for classifying objects in the KITTI 
 dataset as well as regressing a 3D bounding box on the object. Separate heads
 are trained for classification and regression.
@@ -57,7 +56,7 @@ import matplotlib.pyplot as plt
 import math
 
 global wer #window expansion size, controls how far out of frame bbox can be predicted 
-wer = 5
+wer = 1
     
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset_3D(data.Dataset):
@@ -65,7 +64,7 @@ class Train_Dataset_3D(data.Dataset):
     Defines dataset and transforms for training data. The positive images and 
     negative images are stored in two different directories
     """
-    def __init__(self,directory, max_scaling = 8):
+    def __init__(self,directory, max_scaling = 2):
 
         self.im_dir = os.path.join(directory,"images")
         self.max_scaling = max_scaling
@@ -84,6 +83,7 @@ class Train_Dataset_3D(data.Dataset):
         # use os module to get a list of training image files
         # note that shuffling in dataloader is essential because these are ordered
         self.images =  [f for f in os.listdir(os.path.join(directory,"images"))]
+        self.images.sort()
         
         with open(os.path.join(directory,"labels.cpkl"),'rb') as f:
             self.labels = pickle.load(f)
@@ -125,7 +125,6 @@ class Train_Dataset_3D(data.Dataset):
         bbox_2d[2] = (bbox_2d[2]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
         bbox_2d[3] = (bbox_2d[3]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         bbox_2d = torch.from_numpy(bbox_2d).float()
-        
         bbox_3d[0,:] = (bbox_3d[0,:]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
         bbox_3d[1,:] = (bbox_3d[1,:]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         bbox_3d = torch.from_numpy(np.reshape(bbox_3d,16)).float()
@@ -253,7 +252,7 @@ class Train_Dataset_3D(data.Dataset):
         
         if plot_3D:
             new_im = im_array.copy()
-            coords = np.transpose(bbox_3d).astype(int)
+            coords = np.round(np.transpose(bbox_3d)).astype(int)
             #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
             edge_array= np.array([[0,1,0,1,1,0,0,0],
                                   [1,0,1,0,0,1,0,0],
@@ -299,6 +298,7 @@ class Test_Dataset_3D(data.Dataset):
         # use os module to get a list of training image files
         # note that shuffling in dataloader is essential because these are ordered
         self.images =  [f for f in os.listdir(os.path.join(directory,"images"))]
+        self.images.sort()
         
         with open(os.path.join(directory,"labels.cpkl"),'rb') as f:
             self.labels = pickle.load(f)
@@ -442,7 +442,7 @@ class Test_Dataset_3D(data.Dataset):
         
         if plot_3D:
             new_im = im_array.copy()
-            coords = np.transpose(bbox_3d).astype(int)
+            coords = np.round(np.transpose(bbox_3d)).astype(int)
             #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
             edge_array= np.array([[0,1,0,1,1,0,0,0],
                                   [1,0,1,0,0,1,0,0],
@@ -522,8 +522,8 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
-                        #reg_loss.backward(retain_graph = True)
-                        reg_loss.backward()
+                        reg_loss.backward(retain_graph = True)
+                        cls_loss.backward()
                         optimizer.step()
           
                 # statistics
@@ -563,9 +563,9 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 
         print()
         
-        if epoch % 3 == 0:
+        if epoch % 1 == 0:
             # save checkpoint
-            PATH = "splitnet_centered_checkpoint_{}.pt".format(epoch)
+            PATH = "packagenet_centered_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -585,13 +585,15 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 
 
 def plot_batch(model,batch):
-    batch = batch.to(device)
+    model.eval()
+    correct_labels = batch[1][2].data.numpy()
+    correct_classes = batch[1][0].data.numpy()
+    batch = batch[0].to(device)
     cls_outs, reg_out = model(batch)
     _, cls_out = torch.max(cls_outs,1)
      
     batch = batch.data.cpu().numpy()
     bboxes = reg_out.data.cpu().numpy()
-    print (bboxes)
     preds = cls_out.data.cpu().numpy()
     
     # define figure subplot grid
@@ -602,17 +604,31 @@ def plot_batch(model,batch):
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
         pred = preds[i]
-        bbox = bboxes[i].reshape(2,-1)
+        #bbox = bboxes[i].reshape(2,-1)
+        bbox = correct_labels[i].reshape(2,-1)
         
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
         im = std * im + mean
         im = np.clip(im, 0, 1)
         
-        label = pred
+        class_dict = {
+                0:'car',
+                1:'van',
+                2:'truck',
+                3:'pedestrian',
+                4:'person_sitting',
+                5:'cyclist',
+                6:'tram',
+                7:'misc',
+                8:'dontcare'
+                }
+        
+        label = class_dict[pred]
+        label = class_dict[int(correct_classes[i,0])]
         
         # transform bbox coords back into im pixel coords
-        bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
+        bbox = np.round(bbox* 224*wer - 224*(wer-1)/2)
         # plot bboxes
         
         if True:
@@ -655,9 +671,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = None
+    checkpoint_file = None#"packagenet_centered_checkpoint_1.pt"
     start_epoch = 0
-    num_epochs = 4
+    num_epochs = 10
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -667,7 +683,7 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()    
     
     if sys.platform == 'linux':
-        directory =     new_dir =   "/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed"
+        directory =  "/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed_cars_vans_only"
     else:
         directory = "C:\\Users\\derek\\Desktop\\KITTI\\3D_object_parsed"
         
@@ -706,28 +722,29 @@ if __name__ == "__main__":
     cls_criterion = nn.CrossEntropyLoss()
     
     # all parameters are being optimized, not just fc layer
-    #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.01,momentum = 0.9)
-    
+    #optimizer = optim.Adam(model.parameters(), lr=0.0001)
+    optimizer = optim.SGD(model.parameters(), lr=0.001,momentum = 0.9)    
     # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     
 
     # if checkpoint specified, load model and optimizer weights from checkpoint
     if checkpoint_file != None:
-        model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
-        #model,_,start_epoch = load_model(checkpoint_file, model, optimizer) # optimizer restarts from scratch
+        #model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
+        model,_,start_epoch = load_model(checkpoint_file, model, optimizer) # optimizer restarts from scratch
         print("Checkpoint loaded.")
             
     # group dataloaders
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    if True:    
+    train_data[10]
+    
+    if False:    
     # train model
         print("Beginning training.")
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     
-    plot_batch(model,next(iter(testloader))[0])
+    plot_batch(model,next(iter(testloader)))
