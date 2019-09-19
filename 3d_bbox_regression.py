@@ -484,7 +484,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         # Each epoch has a training and validation phase
         for phase in ['train']:#, 'val']:
             if phase == 'train':
-                if True: #disable for Adam
+                if False: #disable for Adam
                     scheduler.step()
                 model.train()  # Set model to training mode
             else:
@@ -524,6 +524,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                     if phase == 'train':
                         reg_loss.backward(retain_graph = True)
                         cls_loss.backward()
+#                        print(model.regressor[0].weight.grad)
                         optimizer.step()
           
                 # statistics
@@ -604,8 +605,10 @@ def plot_batch(model,batch):
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
         pred = preds[i]
-        #bbox = bboxes[i].reshape(2,-1)
-        bbox = correct_labels[i].reshape(2,-1)
+        bbox = bboxes[i].reshape(2,-1)
+        
+        if False:   #plot correct labels instead
+            bbox = correct_labels[i].reshape(2,-1)
         
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
@@ -625,7 +628,7 @@ def plot_batch(model,batch):
                 }
         
         label = class_dict[pred]
-        label = class_dict[int(correct_classes[i,0])]
+        label = "{} -> {}".format(class_dict[int(correct_classes[i,0])],class_dict[pred])
         
         # transform bbox coords back into im pixel coords
         bbox = np.round(bbox* 224*wer - 224*(wer-1)/2)
@@ -673,7 +676,7 @@ if __name__ == "__main__":
     # define start epoch for consistent labeling if checkpoint is reloaded
     checkpoint_file = None#"packagenet_centered_checkpoint_1.pt"
     start_epoch = 0
-    num_epochs = 10
+    num_epochs = 20
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -683,7 +686,7 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()    
     
     if sys.platform == 'linux':
-        directory =  "/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed_cars_vans_only"
+        directory =  "/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed"#_cars_vans_only"
     else:
         directory = "C:\\Users\\derek\\Desktop\\KITTI\\3D_object_parsed"
         
@@ -723,7 +726,7 @@ if __name__ == "__main__":
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    optimizer = optim.SGD(model.parameters(), lr=0.001,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.1,momentum = 0.9)    
     # Decay LR by a factor of 0.1 every 7 epochs
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     
@@ -738,9 +741,8 @@ if __name__ == "__main__":
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    train_data[10]
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
