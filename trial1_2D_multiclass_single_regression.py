@@ -25,8 +25,7 @@ examples to tensors. Transforms include:
 
 # this seems to be a popular thing to do so I've done it here
 from __future__ import print_function, division
-from parallel_regression_classification import load_model,SplitNet
-from PackageNet import PackageNet
+from parallel_regression_classification import load_model, score_pred
 
 # torch and specific torch packages for convenience
 import torch
@@ -56,7 +55,7 @@ import matplotlib.pyplot as plt
 import math
 
 global wer #window expansion size, controls how far out of frame bbox can be predicted 
-wer = 1
+wer = 2
     
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset_3D(data.Dataset):
@@ -464,7 +463,57 @@ class Test_Dataset_3D(data.Dataset):
         
         plt.imshow(new_im)
 
+class CNNnet(nn.Module):
+    """
+    Defines a new network structure with vgg19 feature extraction and two parallel 
+    fully connected layer sequences, one for classification and one for regression
+    """
+    
+    def __init__(self):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(CNNnet, self).__init__()
+        
+        # remove last layers of vgg19 model, save first fc layer and maxpool layer
+        self.vgg = models.vgg19(pretrained=True)
+        del self.vgg.classifier[2:]
 
+        # get size of some layers
+        start_num = self.vgg.classifier[0].out_features
+        mid_num = int(np.sqrt(start_num))
+        cls_out_num = 9 
+        reg_out_num = 4 # bounding box coords
+        
+        # define classifier
+        self.classifier = nn.Sequential(
+                          nn.Linear(start_num,mid_num,bias=True),
+                          nn.ReLU(),
+                          nn.Linear(mid_num,cls_out_num,bias = True),
+                          nn.Softmax(dim = 1)
+                          )
+        
+        # define regressor
+        self.regressor = nn.Sequential(
+                          nn.Linear(start_num,mid_num,bias=True),
+                          nn.ReLU(),
+                          nn.Linear(mid_num,reg_out_num,bias = True),
+                          nn.ReLU()
+                          )
+
+    def forward(self, x):
+        """
+        In the forward function we accept a Tensor of input data and we must return
+        a Tensor of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Tensors.
+        """
+        vgg_out = self.vgg(x)
+        cls_out = self.classifier(vgg_out)
+        reg_out = self.regressor(vgg_out)
+        #out = torch.cat((cls_out, reg_out), 0) # might be the wrong dimension
+        
+        return cls_out,reg_out
 
 
 def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler, 
@@ -484,7 +533,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         # Each epoch has a training and validation phase
         for phase in ['train']:#, 'val']:
             if phase == 'train':
-                if False: #disable for Adam
+                if True: #disable for Adam
                     scheduler.step()
                 model.train()  # Set model to training mode
             else:
@@ -496,7 +545,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
             count = 0
             for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
-                reg_target = labels[2].to(device)
+                reg_target = labels[1].to(device)
                 cls_target = labels[0].long().to(device)
                 # zero the parameter gradients
                 optimizer.zero_grad()
@@ -515,14 +564,15 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 #                    
 #                    # note that the classification loss is done using class-wise probs rather 
 #                    # than a single class label?
+                    dummy_mask = torch.ones(reg_outputs.shape,requires_grad = True).to(device)
                     cls_loss = cls_criterion(cls_outputs,cls_target.squeeze())
-                    reg_loss = reg_criterion(reg_outputs,reg_target)
+                    reg_loss = reg_criterion(reg_outputs,reg_target,dummy_mask)
                     
                     
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
-                        #reg_loss.backward(retain_graph = True)
+                        reg_loss.backward(retain_graph = True)
                         cls_loss.backward()
 #                        print(model.regressor[0].weight.grad)
                         optimizer.step()
@@ -537,36 +587,36 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # copy data to cpu and numpy arrays for scoring
                 cls_pred = cls_outputs.data.cpu().numpy()
                 reg_pred = reg_outputs.data.cpu().numpy()
-#                actual = labels.numpy()
+                actual = np.concatenate((labels[1].numpy(),labels[0].numpy()),1)
                 
                 
-#                correct,bbox_acc = score_pred(cls_pred,reg_pred,actual)
-#                running_corrects += correct
+                correct,bbox_acc = score_pred(cls_pred,reg_pred,actual)
+                running_corrects += correct
     
                 # verbose update
                 count += 1
                 if count % 20 == 0:
-#                    print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
+                    print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
                     print("cls: {}, reg: {}".format(cls_loss.item(),reg_loss.item()))
                     
             epoch_loss = running_loss / dataset_sizes[phase]
-#            epoch_acc = float(running_corrects) / dataset_sizes[phase] * dataloaders['train'].batch_size
+            epoch_acc = float(running_corrects) / dataset_sizes[phase] * dataloaders['train'].batch_size
             
 
-#            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
-#                phase, epoch_loss, epoch_acc))
-#
-#            # deep copy the model
-#            if phase == 'val' and epoch_acc > best_acc:
-#                best_acc = epoch_acc
-#                del best_model_wts
-#                best_model_wts = copy.deepcopy(model.state_dict())
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
+                phase, epoch_loss, epoch_acc))
+
+            # deep copy the model
+            if phase == 'val' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                del best_model_wts
+                best_model_wts = copy.deepcopy(model.state_dict())
 
         print()
         
         if epoch % 1 == 0:
             # save checkpoint
-            PATH = "packagenet_centered_checkpoint_{}.pt".format(epoch)
+            PATH = "trial1_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -586,14 +636,11 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 
 
 def plot_batch(model,batch):
-    model.eval()
-    correct_labels = batch[1][2].data.numpy()
-    correct_classes = batch[1][0].data.numpy()
-    batch = batch[0].to(device)
-    cls_outs, reg_out = model(batch)
+        
+    cls_outs, reg_out = model(batch[0].to(device))
     _, cls_out = torch.max(cls_outs,1)
      
-    batch = batch.data.cpu().numpy()
+    batch = batch[0].data.cpu().numpy()
     bboxes = reg_out.data.cpu().numpy()
     preds = cls_out.data.cpu().numpy()
     
@@ -604,11 +651,8 @@ def plot_batch(model,batch):
     # for image in batch, put image and associated label in grid
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
-        pred = preds[i]
-        bbox = bboxes[i].reshape(2,-1)
-        
-        if False:   #plot correct labels instead
-            bbox = correct_labels[i].reshape(2,-1)
+        pred = np.argmax(preds[i])
+        bbox = bboxes[i]
         
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
@@ -626,45 +670,54 @@ def plot_batch(model,batch):
                 7:'misc',
                 8:'dontcare'
                 }
-        
         label = class_dict[pred]
-        label = "{} -> {}".format(class_dict[int(correct_classes[i,0])],class_dict[pred])
         
         # transform bbox coords back into im pixel coords
-        bbox = np.round(bbox* 224*wer - 224*(wer-1)/2)
+        bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
         # plot bboxes
-        
-        if True:
-            new_im = im
-            coords = np.transpose(bbox).astype(int)
-            #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
-            edge_array= np.array([[0,1,0,1,1,0,0,0],
-                                  [1,0,1,0,0,1,0,0],
-                                  [0,1,0,1,0,0,1,1],
-                                  [1,0,1,0,0,0,1,1],
-                                  [1,0,0,0,0,1,0,1],
-                                  [0,1,0,0,1,0,1,0],
-                                  [0,0,1,0,0,1,0,1],
-                                  [0,0,0,1,1,0,1,0]])
-        
-            # plot lines between indicated corner points
-            for i2 in range(0,8):
-                for j2 in range(0,8):
-                    if edge_array[i2,j2] == 1:
-                        cv2.line(new_im,(coords[i2,0],coords[i2,1]),(coords[j2,0],coords[j2,1]),(10,230,160),1)
-        
+        im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
 
         if batch_size <= 8:
-            axs[i].imshow(new_im)
+            axs[i].imshow(im)
             axs[i].set_title(label)
             axs[i].set_xticks([])
             axs[i].set_yticks([])
         else:
-            axs[i//row_size,i%row_size].imshow(new_im)
+            axs[i//row_size,i%row_size].imshow(im)
             axs[i//row_size,i%row_size].set_title(label)
             axs[i//row_size,i%row_size].set_xticks([])
             axs[i//row_size,i%row_size].set_yticks([])
             plt.pause(.0001)
+
+
+class Box_Loss(nn.Module):        
+    def __init__(self):
+        super(Box_Loss,self).__init__()
+        
+    def forward(self,output,target,mask,epsilon = 1e-07):
+        """ Compute the bbox iou loss for target vs output using tensors to preserve
+        gradients for efficient backpropogation"""
+        
+        # minx miny maxx maxy
+        minx,_ = torch.max(torch.cat((output[:,0].unsqueeze(1),target[:,0].unsqueeze(1)),1),1)
+        miny,_ = torch.max(torch.cat((output[:,1].unsqueeze(1),target[:,1].unsqueeze(1)),1),1)
+        maxx,_ = torch.min(torch.cat((output[:,2].unsqueeze(1),target[:,2].unsqueeze(1)),1),1)
+        maxy,_ = torch.min(torch.cat((output[:,3].unsqueeze(1),target[:,3].unsqueeze(1)),1),1)
+
+        zeros = torch.zeros(minx.shape).unsqueeze(1).to(device)
+        delx,_ = torch.max(torch.cat(((maxx-minx).unsqueeze(1),zeros),1),1)
+        dely,_ = torch.max(torch.cat(((maxy-miny).unsqueeze(1),zeros),1),1)
+        intersection = torch.mul(delx,dely)
+        a1 = torch.mul(output[:,2]-output[:,0],output[:,3]-output[:,1])
+        a2 = torch.mul(target[:,2]-target[:,0],target[:,3]-target[:,1])
+        #a1,_ = torch.max(torch.cat((a1.unsqueeze(1),zeros),1),1)
+        #a2,_ = torch.max(torch.cat((a2.unsqueeze(1),zeros),1),1)
+        union = a1 + a2 - intersection 
+        iou = intersection / (union + epsilon)
+        #iou = torch.clamp(iou,0)
+        mask_sum = mask.sum()
+        return 1- iou.sum()/(mask_sum+epsilon)
+
 
 #------------------------------ Main code here -------------------------------#
 if __name__ == "__main__":
@@ -716,18 +769,18 @@ if __name__ == "__main__":
         model
     except:
         # define CNN model
-        model = PackageNet()
+        model = CNNnet()
         model = model.to(device)
     print("Got model.")
     
     # define loss functions
-    reg_criterion = nn.MSELoss()
+    reg_criterion = Box_Loss()
     cls_criterion = nn.CrossEntropyLoss()
     
     # all parameters are being optimized, not just fc layer
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    #optimizer = optim.SGD(model.parameters(), lr=0.1,momentum = 0.9)    
-    # Decay LR by a factor of 0.1 every 7 epochs
+    #optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.SGD(model.parameters(), lr=0.005,momentum = 0.9)    
+    # Decay LR by a factor of 0.5 every epoch
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     
 

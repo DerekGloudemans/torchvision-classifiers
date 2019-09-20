@@ -38,6 +38,8 @@ import copy
 import matplotlib.pyplot as plt
 import math
 
+
+    
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset(data.Dataset):
     """
@@ -712,7 +714,7 @@ if __name__ == "__main__":
               'num_workers': 0}
     num_epochs = 20
     
-    checkpoint_file = "/home/worklab/Documents/Checkpoints/splitnet_centered5_checkpoint_13.pt"
+    checkpoint_file = None# "/home/worklab/Documents/Checkpoints/splitnet_centered5_checkpoint_13.pt"
     
     # create dataloaders
     try:
@@ -765,7 +767,7 @@ if __name__ == "__main__":
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
@@ -785,3 +787,4 @@ if __name__ == "__main__":
         test = loss(reg_out,reg_out,cls_outs)
     
     torch.cuda.empty_cache()
+   
