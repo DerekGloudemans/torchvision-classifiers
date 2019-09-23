@@ -727,7 +727,7 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = None# "/home/worklab/Documents/Checkpoints/splitnet_centered5_checkpoint_13.pt" #"packagenet_centered_checkpoint_1.pt"
+    checkpoint_file = "trial1_checkpoint_3.pt"
     start_epoch = 0
     num_epochs = 20
     
@@ -779,7 +779,7 @@ if __name__ == "__main__":
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.05,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.001,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     
@@ -787,7 +787,7 @@ if __name__ == "__main__":
     # if checkpoint specified, load model and optimizer weights from checkpoint
     if checkpoint_file != None:
         #model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
-        model,_,start_epoch = load_model(checkpoint_file, model, optimizer) # optimizer restarts from scratch
+        model,_,_ = load_model(checkpoint_file, model, optimizer) # optimizer restarts from scratch
         print("Checkpoint loaded.")
             
     # group dataloaders

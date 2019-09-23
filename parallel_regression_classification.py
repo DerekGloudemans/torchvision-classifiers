@@ -25,7 +25,7 @@ from torch import multiprocessing
 from torchvision import models, transforms
 from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-import cv2
+#import cv2
 from scipy.ndimage import affine_transform
 
 # always good to have
