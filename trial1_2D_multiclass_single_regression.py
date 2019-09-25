@@ -25,7 +25,7 @@ examples to tensors. Transforms include:
 
 # this seems to be a popular thing to do so I've done it here
 from __future__ import print_function, division
-from parallel_regression_classification import load_model, score_pred
+from parallel_regression_classification import load_model, score_pred, SplitNet
 
 # torch and specific torch packages for convenience
 import torch
@@ -35,6 +35,7 @@ import torch.optim as optim
 from torch.utils import data
 from torch.optim import lr_scheduler
 from torch import multiprocessing
+from torch.autograd import Variable
 
 # for convenient data loading, image representation and dataset management
 from torchvision import models, transforms
@@ -55,7 +56,7 @@ import matplotlib.pyplot as plt
 import math
 
 global wer #window expansion size, controls how far out of frame bbox can be predicted 
-wer = 2
+wer = 5
     
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset_3D(data.Dataset):
@@ -75,8 +76,18 @@ class Train_Dataset_3D(data.Dataset):
                 'person_sitting':4,
                 'cyclist':5,
                 'tram': 6,
-                'misc': 7,
-                'dontcare':8
+                'misc': 7
+                }
+
+        self.class_dict = {
+                'car': 1,
+                'van': 1,
+                'truck': 1 ,
+                'pedestrian':0,
+                'person_sitting':0,
+                'cyclist':0,
+                'tram': 0,
+                'misc': 0
                 }
         
         # use os module to get a list of training image files
@@ -88,6 +99,37 @@ class Train_Dataset_3D(data.Dataset):
             self.labels = pickle.load(f)
         
         
+        # get selection of examples with an equal number from each class
+        all_idx_lists = []
+        for key in self.class_dict.keys():
+            idx_list = []
+            for i in range(0,len(self.labels)):
+                if self.labels[i]['class'].lower() == key:
+                    idx_list.append(i)
+            all_idx_lists.append(idx_list)
+        
+        # find shortest idx_list
+        shortest = np.inf
+        for idx_list in all_idx_lists:
+            if len(idx_list) < shortest:
+                shortest = len(idx_list)
+        
+        # maximum class imbalance = 5 times        
+        shortest = shortest * 5
+        
+        # select examples
+        final_idx = []
+        for idx_list in [all_idx_lists[0], all_idx_lists[5]]:        
+            final_idx = final_idx + idx_list[:shortest]    
+        new_images = []
+        new_labels = []
+        for idx in final_idx:
+            new_images.append(self.images[idx])
+            new_labels.append(self.labels[idx])
+        self.labels = new_labels
+        self.images = new_images
+        
+        # define transform
         self.transforms = transforms.Compose([\
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -109,7 +151,7 @@ class Train_Dataset_3D(data.Dataset):
         calib = y['calib']
         cls = y['class']
             
-        cls = self.class_dict[cls.lower()]
+        cls =  self.class_dict[cls.lower()]
         
         # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
         im,bbox_2d,bbox_3d = self.random_scale_crop(im,bbox_2d,bbox_3d,imsize = 224, tighten = 0)
@@ -149,9 +191,9 @@ class Train_Dataset_3D(data.Dataset):
         """
     
         #define parameters for random transform
-        scale = min(self.max_scaling,max(random.gauss(1,0.5),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
+        scale = min(self.max_scaling,max(random.gauss(1.5,0.5),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
         shear = 0 #(random.random()-0.5)*30 #angle
-        rotation = (random.random()-0.5) * 60.0 #angle
+        rotation = (random.random()-0.5) * 20.0 #angle
         
         # transform matrix
         im = transforms.functional.affine(im,rotation,(0,0),scale,shear)
@@ -483,7 +525,7 @@ class CNNnet(nn.Module):
         # get size of some layers
         start_num = self.vgg.classifier[0].out_features
         mid_num = int(np.sqrt(start_num))
-        cls_out_num = 9 
+        cls_out_num = 8 
         reg_out_num = 4 # bounding box coords
         
         # define classifier
@@ -511,7 +553,6 @@ class CNNnet(nn.Module):
         vgg_out = self.vgg(x)
         cls_out = self.classifier(vgg_out)
         reg_out = self.regressor(vgg_out)
-        #out = torch.cat((cls_out, reg_out), 0) # might be the wrong dimension
         
         return cls_out,reg_out
 
@@ -557,16 +598,16 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                     
 #                    # make copy of reg_outputs and zero if target is 0
 #                    # so that bboxes are only learned for positive examples
-#                    temp = cls_target.unsqueeze(1)
-#                    mask = torch.cat((temp,temp,temp,temp),1).float()
-#                    mask.requires_grad = True
-#                    reg_outputs_mod = torch.mul(reg_outputs,mask)
-#                    
+                    temp = cls_target#.unsqueeze(1)
+                    mask = torch.cat((temp,temp,temp,temp),1).float()
+                    mask.requires_grad = True
+                    reg_outputs_mod = torch.mul(reg_outputs,mask)
+                    reg_outputs = reg_outputs_mod 
 #                    # note that the classification loss is done using class-wise probs rather 
 #                    # than a single class label?
-                    dummy_mask = torch.ones(reg_outputs.shape,requires_grad = True).to(device)
+                    #dummy_mask = torch.ones(reg_outputs.shape,requires_grad = True).to(device)
                     cls_loss = cls_criterion(cls_outputs,cls_target.squeeze())
-                    reg_loss = reg_criterion(reg_outputs,reg_target,dummy_mask)
+                    reg_loss = reg_criterion(reg_outputs,reg_target,mask)
                     
                     
                     
@@ -636,13 +677,15 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 
 
 def plot_batch(model,batch):
-        
+    corrects = batch[1][0].data.numpy()
+    correct_bboxes = batch[1][1].data.numpy()    
     cls_outs, reg_out = model(batch[0].to(device))
     _, cls_out = torch.max(cls_outs,1)
      
     batch = batch[0].data.cpu().numpy()
     bboxes = reg_out.data.cpu().numpy()
     preds = cls_out.data.cpu().numpy()
+   
     
     # define figure subplot grid
     batch_size = len(preds)
@@ -651,8 +694,8 @@ def plot_batch(model,batch):
     # for image in batch, put image and associated label in grid
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
-        pred = np.argmax(preds[i])
         bbox = bboxes[i]
+        pred = preds[i]
         
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
@@ -670,8 +713,11 @@ def plot_batch(model,batch):
                 7:'misc',
                 8:'dontcare'
                 }
-        label = class_dict[pred]
-        
+        label = pred#class_dict[pred]
+        if False:
+            correct= corrects[i,0]
+            bbox = correct_bboxes[i]
+            label = class_dict[correct]
         # transform bbox coords back into im pixel coords
         bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
         # plot bboxes
@@ -719,6 +765,42 @@ class Box_Loss(nn.Module):
         return 1- iou.sum()/(mask_sum+epsilon)
 
 
+class FocalLoss(nn.Module): # from https://github.com/clcarwin/focal_loss_pytorch/blob/master/focalloss.py
+    def __init__(self, gamma=2, alpha=None, size_average=True):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+#        wt = 5
+#        weights = torch.FloatTensor([1,wt,wt,wt,wt,wt,wt,wt,0]).to(device)
+        self.alpha = None #weights
+        if isinstance(alpha,(float,int)): self.alpha = torch.Tensor([alpha,1-alpha])
+        if isinstance(alpha,list): self.alpha = torch.Tensor(alpha)
+        self.size_average = size_average
+
+    def forward(self, input, target):
+        if input.dim()>2:
+            input = input.view(input.size(0),input.size(1),-1)  # N,C,H,W => N,C,H*W
+            input = input.transpose(1,2)    # N,C,H*W => N,H*W,C
+            input = input.contiguous().view(-1,input.size(2))   # N,H*W,C => N*H*W,C
+        target = target.view(-1,1)
+
+        logpt = F.log_softmax(input,dim= 1)
+        logpt = logpt.gather(1,target)
+        logpt = logpt.view(-1)
+        pt = Variable(logpt.data.exp())
+
+        if self.alpha is not None:
+            if self.alpha.type()!=input.data.type():
+                self.alpha = self.alpha.type_as(input.data)
+            at = self.alpha.gather(0,target.data.view(-1))
+            logpt = logpt * Variable(at)
+
+        loss = -1 * (1-pt)**self.gamma * logpt
+        if self.size_average: return loss.mean()
+        else: return loss.sum()
+
+
+        
+
 #------------------------------ Main code here -------------------------------#
 if __name__ == "__main__":
     try:
@@ -727,7 +809,7 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = "trial1_checkpoint_3.pt"
+    checkpoint_file =  "splitnet_centered_checkpoint_13.pt"
     start_epoch = 0
     num_epochs = 20
     
@@ -769,17 +851,20 @@ if __name__ == "__main__":
         model
     except:
         # define CNN model
-        model = CNNnet()
+        #model = CNNnet()
+        model = SplitNet()
         model = model.to(device)
     print("Got model.")
     
     # define loss functions
     reg_criterion = Box_Loss()
-    cls_criterion = nn.CrossEntropyLoss()
+    wt = 10
+    weights = torch.FloatTensor([1,wt,wt,wt,wt,wt,wt,wt,0]).to(device)
+    cls_criterion = FocalLoss()
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.001,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.0001,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     
@@ -802,4 +887,4 @@ if __name__ == "__main__":
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     
-    plot_batch(model,next(iter(testloader)))
+    plot_batch(model,next(iter(trainloader)))
