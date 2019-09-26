@@ -78,6 +78,17 @@ class Train_Dataset_3D(data.Dataset):
                 'tram': 6,
                 'misc': 7
                 }
+
+        self.class_dict = {
+                'car': 1,
+                'van': 1,
+                'truck': 1 ,
+                'pedestrian':0,
+                'person_sitting':0,
+                'cyclist':0,
+                'tram': 0,
+                'misc': 0
+                }
         
         # use os module to get a list of training image files
         # note that shuffling in dataloader is essential because these are ordered
@@ -108,7 +119,7 @@ class Train_Dataset_3D(data.Dataset):
         
         # select examples
         final_idx = []
-        for idx_list in all_idx_lists:        
+        for idx_list in [all_idx_lists[0], all_idx_lists[5]]:        
             final_idx = final_idx + idx_list[:shortest]    
         new_images = []
         new_labels = []
@@ -158,9 +169,6 @@ class Train_Dataset_3D(data.Dataset):
         bbox_3d[0,:] = (bbox_3d[0,:]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
         bbox_3d[1,:] = (bbox_3d[1,:]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         bbox_3d = torch.from_numpy(np.reshape(bbox_3d,16)).float()
-        
-        # bbox covers whole area
-        bbox_2d = np.array([0,0,1,1])
         
         calib = torch.from_numpy(calib).float()
         cls = torch.LongTensor([cls])
@@ -566,7 +574,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         # Each epoch has a training and validation phase
         for phase in ['train']:#, 'val']:
             if phase == 'train':
-                if epoch > 0:
+                if True: #disable for Adam
                     scheduler.step()
                 model.train()  # Set model to training mode
             else:
@@ -647,7 +655,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 
         print()
         
-        if epoch % 5 == 0:
+        if epoch % 1 == 0:
             # save checkpoint
             PATH = "trial1_checkpoint_{}.pt".format(epoch)
             torch.save({
@@ -705,7 +713,7 @@ def plot_batch(model,batch):
                 7:'misc',
                 8:'dontcare'
                 }
-        label = class_dict[pred]
+        label = pred#class_dict[pred]
         if False:
             correct= corrects[i,0]
             bbox = correct_bboxes[i]
@@ -801,9 +809,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = "trial1_checkpoint_85.pt"
+    checkpoint_file =  "splitnet_centered_checkpoint_13.pt"
     start_epoch = 0
-    num_epochs = 100
+    num_epochs = 20
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -843,7 +851,8 @@ if __name__ == "__main__":
         model
     except:
         # define CNN model
-        model = CNNnet()
+        #model = CNNnet()
+        model = SplitNet()
         model = model.to(device)
     print("Got model.")
     
@@ -857,7 +866,7 @@ if __name__ == "__main__":
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
     optimizer = optim.SGD(model.parameters(), lr=0.0001,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.7)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     
 
     # if checkpoint specified, load model and optimizer weights from checkpoint
@@ -871,7 +880,7 @@ if __name__ == "__main__":
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
