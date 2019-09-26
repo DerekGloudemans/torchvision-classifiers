@@ -154,13 +154,17 @@ class Train_Dataset_3D(data.Dataset):
         bbox_2d[1] = (bbox_2d[1]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         bbox_2d[2] = (bbox_2d[2]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
         bbox_2d[3] = (bbox_2d[3]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
+        
+        # bbox covers whole area
+        #bbox_2d = np.array([0.0,0.0,1.0,1.0])
+        
         bbox_2d = torch.from_numpy(bbox_2d).float()
+        
         bbox_3d[0,:] = (bbox_3d[0,:]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
         bbox_3d[1,:] = (bbox_3d[1,:]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         bbox_3d = torch.from_numpy(np.reshape(bbox_3d,16)).float()
         
-        # bbox covers whole area
-        bbox_2d = np.array([0,0,1,1])
+        
         
         calib = torch.from_numpy(calib).float()
         cls = torch.LongTensor([cls])
@@ -336,6 +340,9 @@ class Test_Dataset_3D(data.Dataset):
         with open(os.path.join(directory,"labels.cpkl"),'rb') as f:
             self.labels = pickle.load(f)
         
+        
+        self.labels = self.labels[0:6000]
+        self.images = self.labels[0:6000]
         
         self.transforms = transforms.Compose([\
         transforms.ToTensor(),
@@ -549,7 +556,7 @@ class CNNnet(nn.Module):
         return cls_out,reg_out
 
 
-def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler, 
+def train_model(model, cls_criterion,reg_criterion,reg_criterion2, optimizer, scheduler, 
                 dataloaders,dataset_sizes, num_epochs=5, start_epoch = 0):
     """
     Alternates between a training step and a validation step at each epoch. 
@@ -564,7 +571,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         print('-' * 10)
 
         # Each epoch has a training and validation phase
-        for phase in ['train']:#, 'val']:
+        for phase in ['train', 'val']:
             if phase == 'train':
                 if epoch > 0:
                     scheduler.step()
@@ -590,16 +597,16 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                     
 #                    # make copy of reg_outputs and zero if target is 0
 #                    # so that bboxes are only learned for positive examples
-                    temp = cls_target#.unsqueeze(1)
-                    mask = torch.cat((temp,temp,temp,temp),1).float()
-                    mask.requires_grad = True
-                    reg_outputs_mod = torch.mul(reg_outputs,mask)
-                    reg_outputs = reg_outputs_mod 
+#                    temp = cls_target#.unsqueeze(1)
+#                    mask = torch.cat((temp,temp,temp,temp),1).float()
+#                    mask.requires_grad = True
+#                    reg_outputs_mod = torch.mul(reg_outputs,mask)
+#                    reg_outputs = reg_outputs_mod 
 #                    # note that the classification loss is done using class-wise probs rather 
 #                    # than a single class label?
-                    #dummy_mask = torch.ones(reg_outputs.shape,requires_grad = True).to(device)
+                    dummy_mask = torch.ones(reg_outputs.shape,requires_grad = True).to(device)
                     cls_loss = cls_criterion(cls_outputs,cls_target.squeeze())
-                    reg_loss = reg_criterion(reg_outputs,reg_target,mask)
+                    reg_loss = reg_criterion(reg_outputs,reg_target,dummy_mask) + 0.5*reg_criterion2(reg_outputs,reg_target)
                     
                     
                     
@@ -613,7 +620,6 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # statistics
                 running_loss += (reg_loss.item()+cls_loss.item()) * inputs.size(0)
                 # here we need to define a function that checks the bbox iou with correct 
-                # still wrong - must be across whole batch
                 
                 # convert into class label rather than probs
                 _,cls_outputs = torch.max(cls_outputs,1)
@@ -649,7 +655,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         
         if epoch % 5 == 0:
             # save checkpoint
-            PATH = "trial1_checkpoint_{}.pt".format(epoch)
+            PATH = "trial1_reg_init_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -801,9 +807,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = "trial1_checkpoint_85.pt"
+    checkpoint_file = None#"trial_1_large_bbox_init_checkpoint.pt"
     start_epoch = 0
-    num_epochs = 100
+    num_epochs = 75
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -849,15 +855,16 @@ if __name__ == "__main__":
     
     # define loss functions
     reg_criterion = Box_Loss()
+    reg_criterion2 = nn.MSELoss()
     wt = 10
     weights = torch.FloatTensor([1,wt,wt,wt,wt,wt,wt,wt,0]).to(device)
     cls_criterion = FocalLoss()
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.0001,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.001,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.7)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.7)
     
 
     # if checkpoint specified, load model and optimizer weights from checkpoint
@@ -871,10 +878,10 @@ if __name__ == "__main__":
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
-        model = train_model(model, cls_criterion, reg_criterion, optimizer, 
+        model = train_model(model, cls_criterion, reg_criterion,reg_criterion2, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     
