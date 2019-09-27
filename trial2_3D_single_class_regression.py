@@ -807,7 +807,7 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = "trial1_reg_init_checkpoint_70.pt"
+    checkpoint_file = "trial1_success_70.pt"
     start_epoch = 0
     num_epochs = 75
     
