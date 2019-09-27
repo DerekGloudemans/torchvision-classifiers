@@ -25,7 +25,7 @@ from torch import multiprocessing
 from torchvision import models, transforms
 from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-import cv2
+#import cv2
 from scipy.ndimage import affine_transform
 
 # always good to have
@@ -38,6 +38,8 @@ import copy
 import matplotlib.pyplot as plt
 import math
 
+
+    
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset(data.Dataset):
     """
@@ -82,10 +84,10 @@ class Train_Dataset(data.Dataset):
         X = self.transforms(im)
         # normalize y wrt image size and convert to tensor
         # pad to 5 times image size because bbox may fall outside of visible coordinates
-        y[0] = (y[0]+im.size[0]*2)/(im.size[0]*4)
-        y[1] = (y[1]+im.size[1]*2)/(im.size[1]*4)
-        y[2] = (y[2]+im.size[0]*2)/(im.size[0]*4)
-        y[3] = (y[3]+im.size[1]*2)/(im.size[1]*4)
+        y[0] = (y[0]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        y[1] = (y[1]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
+        y[2] = (y[2]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        y[3] = (y[3]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         y = torch.from_numpy(y).float()
         
         return X, y
@@ -247,10 +249,10 @@ class Test_Dataset(data.Dataset):
         X = self.transforms(im)
         
         # normalize y wrt image size and convert to tensor
-        y[0] = (y[0]+im.size[0]*2)/(im.size[0]*4)
-        y[1] = (y[1]+im.size[1]*2)/(im.size[1]*4)
-        y[2] = (y[2]+im.size[0]*2)/(im.size[0]*4)
-        y[3] = (y[3]+im.size[1]*2)/(im.size[1]*4)
+        y[0] = (y[0]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        y[1] = (y[1]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
+        y[2] = (y[2]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        y[3] = (y[3]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         y = torch.from_numpy(y).float()
         
         return X, y
@@ -488,7 +490,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         
         if epoch % 3 == 0:
             # save checkpoint
-            PATH = "checkpoint_{}.pt".format(epoch)
+            PATH = "splitnet_centered_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -565,7 +567,7 @@ def score_pred(cls_preds,reg_preds,actuals):
     return correct_percent,bbox_accs
 
 
-def plot_batch(model,loader):
+def plot_random_batch(model,loader):
     batch,labels = next(iter(loader))
     batch = batch.to(device)
     
@@ -599,8 +601,8 @@ def plot_batch(model,loader):
             label = "pred: non-car"
         
         # transform bbox coords back into im pixel coords
-        bbox = (bbox* 224*4 - 224*2).astype(int)
-        actual = (actual *224*4 - 224*2).astype(int)
+        bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
+        actual = (actual *224*wer - 224*(wer-1)/2).astype(int)
         # plot bboxes
         im = cv2.rectangle(im,(actual[0],actual[1]),(actual[2],actual[3]),(0.9,0.2,0.2),2)
         im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
@@ -611,6 +613,52 @@ def plot_batch(model,loader):
         axs[i//8,i%8].set_xticks([])
         axs[i//8,i%8].set_yticks([])
         plt.pause(.0001)
+
+def plot_batch(model,batch):
+        
+    cls_outs, reg_out = model(batch)
+    _, cls_out = torch.max(cls_outs,1)
+     
+    batch = batch.data.cpu().numpy()
+    bboxes = reg_out.data.cpu().numpy()
+    preds = cls_out.data.cpu().numpy()
+    
+    # define figure subplot grid
+    batch_size = len(preds)
+    row_size = min(batch_size,8)
+    fig, axs = plt.subplots((batch_size+row_size-1)//row_size, row_size, constrained_layout=True)
+    # for image in batch, put image and associated label in grid
+    for i in range(0,batch_size):
+        im =  batch[i].transpose((1,2,0))
+        pred = preds[i]
+        bbox = bboxes[i]
+        
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        im = std * im + mean
+        im = np.clip(im, 0, 1)
+        
+        if np.round(pred) == 1:
+            label = "car: {:05.3f}".format(cls_outs[i,1])
+        else:
+            label = "non-car: {:05.3f}".format(cls_outs[i,0])
+        
+        # transform bbox coords back into im pixel coords
+        bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
+        # plot bboxes
+        im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
+
+        if batch_size <= 8:
+            axs[i].imshow(im)
+            axs[i].set_title(label)
+            axs[i].set_xticks([])
+            axs[i].set_yticks([])
+        else:
+            axs[i//row_size,i%row_size].imshow(im)
+            axs[i//row_size,i%row_size].set_title(label)
+            axs[i//row_size,i%row_size].set_xticks([])
+            axs[i//row_size,i%row_size].set_yticks([])
+            plt.pause(.0001)
 
 class Box_Loss(nn.Module):        
     def __init__(self):
@@ -651,7 +699,8 @@ if __name__ == "__main__":
     
     # for repeatability
     random.seed = 0
-    
+    global wer #window expansion size, controls how far out of frame bbox can be predicted 
+    wer = 5
 #    del model, train_data,test_data,trainloader,testloader
     
     # CUDA for PyTorch
@@ -663,9 +712,9 @@ if __name__ == "__main__":
     params = {'batch_size': 32,
               'shuffle': True,
               'num_workers': 0}
-    num_epochs = 200
+    num_epochs = 20
     
-    checkpoint_file = "/home/worklab/Documents/Checkpoints/splitnet_checkpoint_12.pt"
+    checkpoint_file = None# "/home/worklab/Documents/Checkpoints/splitnet_centered5_checkpoint_13.pt"
     
     # create dataloaders
     try:
@@ -718,15 +767,24 @@ if __name__ == "__main__":
     dataloaders = {"train":trainloader, "val": testloader}
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training.")
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
-    plot_batch(model,testloader)
-    loss = Box_Loss()
+        
+#    plot_random_batch(model,testloader)
+    
+    
     batch,labels = next(iter(testloader))
     batch = batch.to(device)
-    cls_outs, reg_out = model(batch)
-    test = loss(reg_out,reg_out,cls_outs)
+    plot_batch(model,batch)
+    
+    if False: #test loss function
+        loss = Box_Loss()
+        cls_outs, reg_out = model(batch)
+        test = loss(reg_out,reg_out,cls_outs)
+    
+    torch.cuda.empty_cache()
+   
