@@ -1,2 +1,2 @@
 # torchvision-classifiers
-Use torchvision pretrained classifiers for classification, detection and tracking applications
+This repository contains a variety of tests for training pytorch models with ResNet and VGG pretrained backbones for binary and mutliclass classification as well as 2D and 3D bounding box regression. Work on this repository is ongoing, so the repository will be cleaned up once it has reached a more permanent state. Some examples of bounding box regression are shown below.
