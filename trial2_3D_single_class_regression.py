@@ -525,7 +525,7 @@ class CNNnet(nn.Module):
         start_num = self.vgg.classifier[0].out_features
         mid_num = int(np.sqrt(start_num))
         cls_out_num = 8 
-        reg_out_num = 4 # bounding box coords
+        reg_out_num = 16 # bounding box coords
         
         # define classifier
         self.classifier = nn.Sequential(
@@ -556,7 +556,7 @@ class CNNnet(nn.Module):
         return cls_out,reg_out
 
 
-def train_model(model, cls_criterion,reg_criterion,reg_criterion2, optimizer, scheduler, 
+def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler, 
                 dataloaders,dataset_sizes, num_epochs=5, start_epoch = 0):
     """
     Alternates between a training step and a validation step at each epoch. 
@@ -571,7 +571,7 @@ def train_model(model, cls_criterion,reg_criterion,reg_criterion2, optimizer, sc
         print('-' * 10)
 
         # Each epoch has a training and validation phase
-        for phase in ['train', 'val']:
+        for phase in ['train']:#, 'val']:
             if phase == 'train':
                 if epoch > 0:
                     scheduler.step()
@@ -585,7 +585,7 @@ def train_model(model, cls_criterion,reg_criterion,reg_criterion2, optimizer, sc
             count = 0
             for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
-                reg_target = labels[1].to(device)
+                reg_target = labels[2].to(device)
                 cls_target = labels[0].long().to(device)
                 # zero the parameter gradients
                 optimizer.zero_grad()
@@ -606,13 +606,13 @@ def train_model(model, cls_criterion,reg_criterion,reg_criterion2, optimizer, sc
 #                    # than a single class label?
                     dummy_mask = torch.ones(reg_outputs.shape,requires_grad = True).to(device)
                     cls_loss = cls_criterion(cls_outputs,cls_target.squeeze())
-                    reg_loss = reg_criterion(reg_outputs,reg_target,dummy_mask) + 0.5*reg_criterion2(reg_outputs,reg_target)
+                    reg_loss = reg_criterion(reg_outputs,reg_target) 
                     
                     
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
-                        reg_loss.backward(retain_graph = True)
+                        #reg_loss.backward(retain_graph = True)
                         cls_loss.backward()
 #                        print(model.regressor[0].weight.grad)
                         optimizer.step()
@@ -629,7 +629,9 @@ def train_model(model, cls_criterion,reg_criterion,reg_criterion2, optimizer, sc
                 actual = np.concatenate((labels[1].numpy(),labels[0].numpy()),1)
                 
                 
-                correct,bbox_acc = score_pred(cls_pred,reg_pred,actual)
+#                correct,bbox_acc = score_pred(cls_pred,reg_pred,actual)
+                correct = 0
+                bbox_acc = 0
                 running_corrects += correct
     
                 # verbose update
@@ -655,7 +657,7 @@ def train_model(model, cls_criterion,reg_criterion,reg_criterion2, optimizer, sc
         
         if epoch % 5 == 0:
             # save checkpoint
-            PATH = "trial1_reg_init_checkpoint_{}.pt".format(epoch)
+            PATH = "trial2_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -675,15 +677,16 @@ def train_model(model, cls_criterion,reg_criterion,reg_criterion2, optimizer, sc
 
 
 def plot_batch(model,batch):
-    corrects = batch[1][0].data.numpy()
-    correct_bboxes = batch[1][1].data.numpy()    
-    cls_outs, reg_out = model(batch[0].to(device))
+    model.eval()
+    correct_labels = batch[1][2].data.numpy()
+    correct_classes = batch[1][0].data.numpy()
+    batch = batch[0].to(device)
+    cls_outs, reg_out = model(batch)
     _, cls_out = torch.max(cls_outs,1)
      
-    batch = batch[0].data.cpu().numpy()
+    batch = batch.data.cpu().numpy()
     bboxes = reg_out.data.cpu().numpy()
     preds = cls_out.data.cpu().numpy()
-   
     
     # define figure subplot grid
     batch_size = len(preds)
@@ -692,8 +695,11 @@ def plot_batch(model,batch):
     # for image in batch, put image and associated label in grid
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
-        bbox = bboxes[i]
         pred = preds[i]
+        bbox = bboxes[i].reshape(2,-1)
+        
+        if True:   #plot correct labels instead
+            bbox = correct_labels[i].reshape(2,-1)
         
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
@@ -711,23 +717,41 @@ def plot_batch(model,batch):
                 7:'misc',
                 8:'dontcare'
                 }
+        
         label = class_dict[pred]
-        if True:
-            correct= corrects[i,0]
-            bbox = correct_bboxes[i]
-            label = class_dict[correct]
+        label = "{} -> {}".format(class_dict[int(correct_classes[i,0])],class_dict[pred])
+        
         # transform bbox coords back into im pixel coords
-        bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
+        bbox = np.round(bbox* 224*wer - 224*(wer-1)/2)
         # plot bboxes
-        im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
+        
+        if True:
+            new_im = im
+            coords = np.transpose(bbox).astype(int)
+            #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
+            edge_array= np.array([[0,1,0,1,1,0,0,0],
+                                  [1,0,1,0,0,1,0,0],
+                                  [0,1,0,1,0,0,1,1],
+                                  [1,0,1,0,0,0,1,1],
+                                  [1,0,0,0,0,1,0,1],
+                                  [0,1,0,0,1,0,1,0],
+                                  [0,0,1,0,0,1,0,1],
+                                  [0,0,0,1,1,0,1,0]])
+        
+            # plot lines between indicated corner points
+            for i2 in range(0,8):
+                for j2 in range(0,8):
+                    if edge_array[i2,j2] == 1:
+                        cv2.line(new_im,(coords[i2,0],coords[i2,1]),(coords[j2,0],coords[j2,1]),(10,230,160),1)
+        
 
         if batch_size <= 8:
-            axs[i].imshow(im)
+            axs[i].imshow(new_im)
             axs[i].set_title(label)
             axs[i].set_xticks([])
             axs[i].set_yticks([])
         else:
-            axs[i//row_size,i%row_size].imshow(im)
+            axs[i//row_size,i%row_size].imshow(new_im)
             axs[i//row_size,i%row_size].set_title(label)
             axs[i//row_size,i%row_size].set_xticks([])
             axs[i//row_size,i%row_size].set_yticks([])
@@ -807,9 +831,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = "trial1_success_70.pt"
+    checkpoint_file = "trial2_checkpoint_5.pt"
     start_epoch = 0
-    num_epochs = 75
+    num_epochs = 25
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -854,10 +878,7 @@ if __name__ == "__main__":
     print("Got model.")
     
     # define loss functions
-    reg_criterion = Box_Loss()
-    reg_criterion2 = nn.MSELoss()
-    wt = 10
-    weights = torch.FloatTensor([1,wt,wt,wt,wt,wt,wt,wt,0]).to(device)
+    reg_criterion = nn.MSELoss()
     cls_criterion = FocalLoss()
     
     # all parameters are being optimized, not just fc layer
@@ -880,8 +901,8 @@ if __name__ == "__main__":
     
     if False:    
     # train model
-        print("Beginning training.")
-        model = train_model(model, cls_criterion, reg_criterion,reg_criterion2, optimizer, 
+        print("Beginning training on {}.".format(device))
+        model = train_model(model, cls_criterion, reg_criterion, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     
