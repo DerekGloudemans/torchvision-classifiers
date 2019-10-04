@@ -571,7 +571,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         print('-' * 10)
 
         # Each epoch has a training and validation phase
-        for phase in ['train', 'val']:
+        for phase in ['train']:#, 'val']:
             if phase == 'train':
                 if epoch > 0:
                     scheduler.step()
@@ -612,7 +612,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
-                        reg_loss.backward(retain_graph = True)
+                        #reg_loss.backward(retain_graph = True)
                         cls_loss.backward()
 #                        print(model.regressor[0].weight.grad)
                         optimizer.step()
@@ -657,7 +657,7 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
         
         if epoch % 5 == 0:
             # save checkpoint
-            PATH = "trial1_reg_init_checkpoint_{}.pt".format(epoch)
+            PATH = "trial2_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -831,9 +831,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = None #"trial1_success_70.pt"
+    checkpoint_file = "trial2_checkpoint_5.pt"
     start_epoch = 0
-    num_epochs = 75
+    num_epochs = 25
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -899,9 +899,9 @@ if __name__ == "__main__":
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
     
-    if True:    
+    if False:    
     # train model
-        print("Beginning training.")
+        print("Beginning training on {}.".format(device))
         model = train_model(model, cls_criterion, reg_criterion, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)

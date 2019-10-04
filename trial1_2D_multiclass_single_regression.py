@@ -720,7 +720,8 @@ def plot_batch(model,batch):
         bbox = (bbox* 224*wer - 224*(wer-1)/2).astype(int)
         # plot bboxes
         im = cv2.rectangle(im,(bbox[0],bbox[1]),(bbox[2],bbox[3]),(0.1,0.6,0.9),2)
-
+        im = im.get()
+        
         if batch_size <= 8:
             axs[i].imshow(im)
             axs[i].set_title(label)
@@ -732,7 +733,7 @@ def plot_batch(model,batch):
             axs[i//row_size,i%row_size].set_xticks([])
             axs[i//row_size,i%row_size].set_yticks([])
             plt.pause(.0001)
-
+    torch.cuda_empty_cache()
 
 class Box_Loss(nn.Module):        
     def __init__(self):
@@ -807,7 +808,7 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = "trial1_reg_init_checkpoint_70.pt"
+    checkpoint_file = "/media/worklab/data_HDD/cv_data/Checkpoints/trial1_success_70.pt"
     start_epoch = 0
     num_epochs = 75
     
@@ -886,3 +887,17 @@ if __name__ == "__main__":
                             num_epochs, start_epoch)
     
     plot_batch(model,next(iter(testloader)))
+    
+    if False:
+        # time 100 batches
+        total = 0
+        print("Starting time testing.")
+        for i in range(0,100):
+            inputs,_ = next(iter(testloader))
+            inputs = inputs.to(device)
+            start = time.time()
+            out = model(inputs)
+            end = time.time()
+            elapsed = end-start
+            total += elapsed
+        print("100 batches of 32 processed at {} batches/second".format(100/total))
