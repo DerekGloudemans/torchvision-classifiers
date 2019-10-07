@@ -733,7 +733,7 @@ def plot_batch(model,batch):
             axs[i//row_size,i%row_size].set_xticks([])
             axs[i//row_size,i%row_size].set_yticks([])
             plt.pause(.0001)
-    torch.cuda_empty_cache()
+    torch.cuda.empty_cache()
 
 class Box_Loss(nn.Module):        
     def __init__(self):

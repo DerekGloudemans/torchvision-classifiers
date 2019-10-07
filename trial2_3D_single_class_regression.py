@@ -56,7 +56,7 @@ import matplotlib.pyplot as plt
 import math
 
 global wer #window expansion size, controls how far out of frame bbox can be predicted 
-wer = 5
+wer = 3
     
 #--------------------------- Definitions section -----------------------------#
 class Train_Dataset_3D(data.Dataset):
@@ -112,7 +112,9 @@ class Train_Dataset_3D(data.Dataset):
             final_idx = final_idx + idx_list[:shortest]    
         new_images = []
         new_labels = []
-        for idx in final_idx:
+        
+        # only select cars
+        for idx in all_idx_lists[0]:
             new_images.append(self.images[idx])
             new_labels.append(self.labels[idx])
         self.labels = new_labels
@@ -164,7 +166,9 @@ class Train_Dataset_3D(data.Dataset):
         bbox_3d[1,:] = (bbox_3d[1,:]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
         bbox_3d = torch.from_numpy(np.reshape(bbox_3d,16)).float()
         
-        
+        # clamp to prevent really large anomalous values
+        bbox_3d = torch.clamp(bbox_3d,min = 0.0)
+        bbox_3d = torch.clamp(bbox_3d,max = 1.0)
         
         calib = torch.from_numpy(calib).float()
         cls = torch.LongTensor([cls])
@@ -389,6 +393,9 @@ class Test_Dataset_3D(data.Dataset):
         
         calib = torch.from_numpy(calib).float()
         cls = torch.Tensor([cls])
+        
+        
+        
         # y is a tuple of four tensors: cls,2dbbox, 3dbbox, and camera calibration matrix
         y = (cls,bbox_2d,bbox_3d,calib)
         
@@ -524,16 +531,9 @@ class CNNnet(nn.Module):
         # get size of some layers
         start_num = self.vgg.classifier[0].out_features
         mid_num = int(np.sqrt(start_num))
-        cls_out_num = 8 
         reg_out_num = 16 # bounding box coords
         
-        # define classifier
-        self.classifier = nn.Sequential(
-                          nn.Linear(start_num,mid_num,bias=True),
-                          nn.ReLU(),
-                          nn.Linear(mid_num,cls_out_num,bias = True),
-                          nn.Softmax(dim = 1)
-                          )
+
         
         # define regressor
         self.regressor = nn.Sequential(
@@ -550,13 +550,12 @@ class CNNnet(nn.Module):
         well as arbitrary operators on Tensors.
         """
         vgg_out = self.vgg(x)
-        cls_out = self.classifier(vgg_out)
         reg_out = self.regressor(vgg_out)
         
-        return cls_out,reg_out
+        return reg_out
 
 
-def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler, 
+def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler, 
                 dataloaders,dataset_sizes, num_epochs=5, start_epoch = 0):
     """
     Alternates between a training step and a validation step at each epoch. 
@@ -586,48 +585,29 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
             for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
                 reg_target = labels[2].to(device)
-                cls_target = labels[0].long().to(device)
                 # zero the parameter gradients
                 optimizer.zero_grad()
+
+                # check for anomalous data
+                if  torch.max(reg_target) > 1 or torch.min(reg_target) < 0:
+                    print(torch.max(inputs),torch.max(reg_target),torch.min(reg_target))
+                    raise Exception
 
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    cls_outputs, reg_outputs = model(inputs)
-                    
-#                    # make copy of reg_outputs and zero if target is 0
-#                    # so that bboxes are only learned for positive examples
-#                    temp = cls_target#.unsqueeze(1)
-#                    mask = torch.cat((temp,temp,temp,temp),1).float()
-#                    mask.requires_grad = True
-#                    reg_outputs_mod = torch.mul(reg_outputs,mask)
-#                    reg_outputs = reg_outputs_mod 
-#                    # note that the classification loss is done using class-wise probs rather 
-#                    # than a single class label?
-                    dummy_mask = torch.ones(reg_outputs.shape,requires_grad = True).to(device)
-                    cls_loss = cls_criterion(cls_outputs,cls_target.squeeze())
-                    reg_loss = reg_criterion(reg_outputs,reg_target) 
-                    
-                    
+                    reg_outputs = model(inputs)
+                    reg_loss = reg_criterion(reg_outputs,reg_target) + reg_criterion2(reg_outputs,reg_target)
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
-                        #reg_loss.backward(retain_graph = True)
-                        cls_loss.backward()
-#                        print(model.regressor[0].weight.grad)
+                        reg_loss.backward(retain_graph = True)
+#                       print(model.regressor[0].weight.grad)
                         optimizer.step()
           
                 # statistics
-                running_loss += (reg_loss.item()+cls_loss.item()) * inputs.size(0)
+                running_loss += (reg_loss.item()) * inputs.size(0)
                 # here we need to define a function that checks the bbox iou with correct 
-                
-                # convert into class label rather than probs
-                _,cls_outputs = torch.max(cls_outputs,1)
-                # copy data to cpu and numpy arrays for scoring
-                cls_pred = cls_outputs.data.cpu().numpy()
-                reg_pred = reg_outputs.data.cpu().numpy()
-                actual = np.concatenate((labels[1].numpy(),labels[0].numpy()),1)
-                
                 
 #                correct,bbox_acc = score_pred(cls_pred,reg_pred,actual)
                 correct = 0
@@ -637,8 +617,8 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
                 # verbose update
                 count += 1
                 if count % 20 == 0:
-                    print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
-                    print("cls: {}, reg: {}".format(cls_loss.item(),reg_loss.item()))
+                    #print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
+                    print("reg: {}".format(reg_loss.item()))
                     
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = float(running_corrects) / dataset_sizes[phase] * dataloaders['train'].batch_size
@@ -681,24 +661,21 @@ def plot_batch(model,batch):
     correct_labels = batch[1][2].data.numpy()
     correct_classes = batch[1][0].data.numpy()
     batch = batch[0].to(device)
-    cls_outs, reg_out = model(batch)
-    _, cls_out = torch.max(cls_outs,1)
+    reg_out = model(batch)
      
     batch = batch.data.cpu().numpy()
     bboxes = reg_out.data.cpu().numpy()
-    preds = cls_out.data.cpu().numpy()
     
     # define figure subplot grid
-    batch_size = len(preds)
+    batch_size = len(reg_out)
     row_size = min(batch_size,8)
     fig, axs = plt.subplots((batch_size+row_size-1)//row_size, row_size, constrained_layout=True)
     # for image in batch, put image and associated label in grid
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
-        pred = preds[i]
         bbox = bboxes[i].reshape(2,-1)
         
-        if True:   #plot correct labels instead
+        if False:   #plot correct labels instead
             bbox = correct_labels[i].reshape(2,-1)
         
         mean = np.array([0.485, 0.456, 0.406])
@@ -718,15 +695,14 @@ def plot_batch(model,batch):
                 8:'dontcare'
                 }
         
-        label = class_dict[pred]
-        label = "{} -> {}".format(class_dict[int(correct_classes[i,0])],class_dict[pred])
+        label = "{}".format(class_dict[int(correct_classes[i,0])])
         
         # transform bbox coords back into im pixel coords
         bbox = np.round(bbox* 224*wer - 224*(wer-1)/2)
         # plot bboxes
         
         if True:
-            new_im = im
+            new_im = im.copy()
             coords = np.transpose(bbox).astype(int)
             #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
             edge_array= np.array([[0,1,0,1,1,0,0,0],
@@ -744,7 +720,9 @@ def plot_batch(model,batch):
                     if edge_array[i2,j2] == 1:
                         cv2.line(new_im,(coords[i2,0],coords[i2,1]),(coords[j2,0],coords[j2,1]),(10,230,160),1)
         
-
+        # get array from CV image (UMat style)
+        #im = im.get()
+        
         if batch_size <= 8:
             axs[i].imshow(new_im)
             axs[i].set_title(label)
@@ -756,7 +734,8 @@ def plot_batch(model,batch):
             axs[i//row_size,i%row_size].set_xticks([])
             axs[i//row_size,i%row_size].set_yticks([])
             plt.pause(.0001)
-
+    torch.cuda.empty_cache()
+    
 
 class Box_Loss(nn.Module):        
     def __init__(self):
@@ -785,7 +764,49 @@ class Box_Loss(nn.Module):
         #iou = torch.clamp(iou,0)
         mask_sum = mask.sum()
         return 1- iou.sum()/(mask_sum+epsilon)
+    
+class Flat_Loss(nn.Module):
+    def __init__(self):
+        super(Flat_Loss,self).__init__()
+        
+    def forward(self,output,target,epsilon = 1e-07):
+        """ Computes 2D bbox iou by flattening 3D bbox prediction and compares
+        with target"""
+        # get approx 2D bbox for back of pred object
+        topx = torch.mean(torch.cat((output[:,2].unsqueeze(1),output[:,3].unsqueeze(1)),1),1).unsqueeze(1)
+        botx = torch.mean(torch.cat((output[:,6].unsqueeze(1),output[:,7].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy = torch.mean(torch.cat((output[:,11].unsqueeze(1),output[:,15].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy = torch.mean(torch.cat((output[:,10].unsqueeze(1),output[:,14].unsqueeze(1)),1),1).unsqueeze(1)
+        flat_out = torch.cat((topx,lefy,botx,rigy),1)
+        
+        # get approx 2D bboc for back of target
+        topx2 = torch.mean(torch.cat((target[:,2].unsqueeze(1),target[:,3].unsqueeze(1)),1),1).unsqueeze(1)
+        botx2 = torch.mean(torch.cat((target[:,6].unsqueeze(1),target[:,7].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy2 = torch.mean(torch.cat((target[:,11].unsqueeze(1),target[:,15].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy2 = torch.mean(torch.cat((target[:,10].unsqueeze(1),target[:,14].unsqueeze(1)),1),1).unsqueeze(1)
+        flat_targ = torch.cat((topx2,lefy2,botx2,rigy2),1)
+        
+        # calculate bbox as normal
+        # minx miny maxx maxy
+        minx,_ = torch.max(torch.cat((flat_out[:,0].unsqueeze(1),flat_targ[:,0].unsqueeze(1)),1),1)
+        miny,_ = torch.max(torch.cat((flat_out[:,1].unsqueeze(1),flat_targ[:,1].unsqueeze(1)),1),1)
+        maxx,_ = torch.min(torch.cat((flat_out[:,2].unsqueeze(1),flat_targ[:,2].unsqueeze(1)),1),1)
+        maxy,_ = torch.min(torch.cat((flat_out[:,3].unsqueeze(1),flat_targ[:,3].unsqueeze(1)),1),1)
 
+        zeros = torch.zeros(minx.shape).unsqueeze(1).to(device)
+        delx,_ = torch.max(torch.cat(((maxx-minx).unsqueeze(1),zeros),1),1)
+        dely,_ = torch.max(torch.cat(((maxy-miny).unsqueeze(1),zeros),1),1)
+        intersection = torch.mul(delx,dely)
+        a1 = torch.mul(flat_out[:,2]-flat_out[:,0],flat_out[:,3]-flat_out[:,1])
+        a2 = torch.mul(flat_targ[:,2]-flat_targ[:,0],flat_targ[:,3]-flat_targ[:,1])
+        #a1,_ = torch.max(torch.cat((a1.unsqueeze(1),zeros),1),1)
+        #a2,_ = torch.max(torch.cat((a2.unsqueeze(1),zeros),1),1)
+        union = a1 + a2 - intersection 
+        iou = intersection / (union + epsilon)
+        #iou = torch.clamp(iou,0)
+        
+        return 1- iou.sum()/output.shape[0]
+    
 
 class FocalLoss(nn.Module): # from https://github.com/clcarwin/focal_loss_pytorch/blob/master/focalloss.py
     def __init__(self, gamma=2, alpha=None, size_average=True):
@@ -831,9 +852,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = "trial2_checkpoint_5.pt"
+    checkpoint_file = None
     start_epoch = 0
-    num_epochs = 25
+    num_epochs = 20
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -878,12 +899,12 @@ if __name__ == "__main__":
     print("Got model.")
     
     # define loss functions
-    reg_criterion = nn.MSELoss()
-    cls_criterion = FocalLoss()
+    reg_criterion = Flat_Loss()
+    reg_criterion2 = nn.MSELoss()
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.001,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.01,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.7)
     
@@ -899,11 +920,11 @@ if __name__ == "__main__":
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training on {}.".format(device))
-        model = train_model(model, cls_criterion, reg_criterion, optimizer, 
+        model = train_model(model, reg_criterion,reg_criterion2, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     
-    plot_batch(model,next(iter(testloader)))
+    plot_batch(model,next(iter(trainloader)))
