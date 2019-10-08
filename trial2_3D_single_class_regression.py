@@ -588,16 +588,11 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
-                # check for anomalous data
-                if  torch.max(reg_target) > 1 or torch.min(reg_target) < 0:
-                    print(torch.max(inputs),torch.max(reg_target),torch.min(reg_target))
-                    raise Exception
-
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     reg_outputs = model(inputs)
-                    reg_loss = reg_criterion(reg_outputs,reg_target) + reg_criterion2(reg_outputs,reg_target)
+                    reg_loss = reg_criterion(reg_outputs,reg_target) + 10*reg_criterion2(reg_outputs,reg_target)
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
@@ -670,6 +665,7 @@ def plot_batch(model,batch):
     batch_size = len(reg_out)
     row_size = min(batch_size,8)
     fig, axs = plt.subplots((batch_size+row_size-1)//row_size, row_size, constrained_layout=True)
+    
     # for image in batch, put image and associated label in grid
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
@@ -722,6 +718,7 @@ def plot_batch(model,batch):
         
         # get array from CV image (UMat style)
         #im = im.get()
+        
         
         if batch_size <= 8:
             axs[i].imshow(new_im)
@@ -786,26 +783,28 @@ class Flat_Loss(nn.Module):
         rigy2 = torch.mean(torch.cat((target[:,10].unsqueeze(1),target[:,14].unsqueeze(1)),1),1).unsqueeze(1)
         flat_targ = torch.cat((topx2,lefy2,botx2,rigy2),1)
         
-        # calculate bbox as normal
-        # minx miny maxx maxy
-        minx,_ = torch.max(torch.cat((flat_out[:,0].unsqueeze(1),flat_targ[:,0].unsqueeze(1)),1),1)
-        miny,_ = torch.max(torch.cat((flat_out[:,1].unsqueeze(1),flat_targ[:,1].unsqueeze(1)),1),1)
-        maxx,_ = torch.min(torch.cat((flat_out[:,2].unsqueeze(1),flat_targ[:,2].unsqueeze(1)),1),1)
-        maxy,_ = torch.min(torch.cat((flat_out[:,3].unsqueeze(1),flat_targ[:,3].unsqueeze(1)),1),1)
-
-        zeros = torch.zeros(minx.shape).unsqueeze(1).to(device)
-        delx,_ = torch.max(torch.cat(((maxx-minx).unsqueeze(1),zeros),1),1)
-        dely,_ = torch.max(torch.cat(((maxy-miny).unsqueeze(1),zeros),1),1)
-        intersection = torch.mul(delx,dely)
-        a1 = torch.mul(flat_out[:,2]-flat_out[:,0],flat_out[:,3]-flat_out[:,1])
-        a2 = torch.mul(flat_targ[:,2]-flat_targ[:,0],flat_targ[:,3]-flat_targ[:,1])
-        #a1,_ = torch.max(torch.cat((a1.unsqueeze(1),zeros),1),1)
-        #a2,_ = torch.max(torch.cat((a2.unsqueeze(1),zeros),1),1)
-        union = a1 + a2 - intersection 
-        iou = intersection / (union + epsilon)
-        #iou = torch.clamp(iou,0)
+        dummy_mask = torch.ones(flat_targ.shape,requires_grad = True).to(device)
+        box_loss = Box_Loss()
+        back_loss = box_loss(flat_out,flat_targ,dummy_mask)
         
-        return 1- iou.sum()/output.shape[0]
+        # repeat for front of object
+        # get approx 2D bbox for back of pred object
+        topx3 = torch.mean(torch.cat((output[:,0].unsqueeze(1),output[:,1].unsqueeze(1)),1),1).unsqueeze(1)
+        botx3 = torch.mean(torch.cat((output[:,4].unsqueeze(1),output[:,5].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy3 = torch.mean(torch.cat((output[:,8].unsqueeze(1),output[:,12].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy3 = torch.mean(torch.cat((output[:,9].unsqueeze(1),output[:,13].unsqueeze(1)),1),1).unsqueeze(1)
+        flat_out2 = torch.cat((topx3,lefy3,botx3,rigy3),1)
+        
+        # get approx 2D bboc for back of target
+        topx4 = torch.mean(torch.cat((target[:,0].unsqueeze(1),target[:,1].unsqueeze(1)),1),1).unsqueeze(1)
+        botx4 = torch.mean(torch.cat((target[:,4].unsqueeze(1),target[:,5].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy4 = torch.mean(torch.cat((target[:,8].unsqueeze(1),target[:,12].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy4 = torch.mean(torch.cat((target[:,9].unsqueeze(1),target[:,13].unsqueeze(1)),1),1).unsqueeze(1)
+        flat_targ2 = torch.cat((topx4,lefy4,botx4,rigy4),1)
+        front_loss = box_loss(flat_out2,flat_targ2,dummy_mask)
+       
+        
+        return (back_loss + front_loss)/2.0
     
 
 class FocalLoss(nn.Module): # from https://github.com/clcarwin/focal_loss_pytorch/blob/master/focalloss.py
@@ -852,9 +851,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = None
+    checkpoint_file = "trial2_bad_but_actually_something.pt"
     start_epoch = 0
-    num_epochs = 20
+    num_epochs = 100
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -904,9 +903,9 @@ if __name__ == "__main__":
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.01,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.00750,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.7)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
     
 
     # if checkpoint specified, load model and optimizer weights from checkpoint
