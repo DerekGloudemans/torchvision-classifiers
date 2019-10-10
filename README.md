@@ -3,3 +3,7 @@ This repository contains a variety of tests for training pytorch models with Res
 
 The network performs classification across 8 classes with around 95% accuracy, and performs bounding box regression at about 70% intersection-over-union overlap accuracy. It should be noted that a single regression head was trained for all 8 classes, whereas a model with a separate regression head for each class would be expected to make more nuanced and accurate prediction. Forward computation time for this network for a batch of 32 images on an NVIDIA GTX 1070 is 0.0033 seconds.
 ![](readme_ims/example_class_reg.png)
+
+Very preliminary 3D results are shown below. This is my current active project so progress is being made almost daily!
+![](readme_ims/rough_3d.png)
+
