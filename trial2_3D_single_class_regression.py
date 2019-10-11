@@ -193,7 +193,7 @@ class Train_Dataset_3D(data.Dataset):
         #define parameters for random transform
         scale = min(self.max_scaling,max(random.gauss(1.5,0.5),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
         shear = 0 #(random.random()-0.5)*30 #angle
-        rotation = (random.random()-0.5) * 20.0 #angle
+        rotation = (random.random()-0.5) * 0#20.0 #angle
         
         # transform matrix
         im = transforms.functional.affine(im,rotation,(0,0),scale,shear)
@@ -592,7 +592,10 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     reg_outputs = model(inputs)
-                    reg_loss = reg_criterion(reg_outputs,reg_target) + 10*reg_criterion2(reg_outputs,reg_target)
+                    # intially weight MSE highly but decrease over time, and regularize to 1
+                    reg_loss = (reg_criterion(reg_outputs,reg_target) + \
+                                round(10.0/(epoch+1))*reg_criterion2(reg_outputs,reg_target))/ \
+                                (1+ round(10.0/(epoch+1))) 
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
@@ -611,10 +614,11 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
     
                 # verbose update
                 count += 1
-                if count % 20 == 0:
+                if count % 100 == 0:
                     #print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
                     print("reg: {}".format(reg_loss.item()))
-                    
+            
+            torch.cuda.empty_cache()
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = float(running_corrects) / dataset_sizes[phase] * dataloaders['train'].batch_size
             
@@ -774,37 +778,92 @@ class Flat_Loss(nn.Module):
         botx = torch.mean(torch.cat((output[:,6].unsqueeze(1),output[:,7].unsqueeze(1)),1),1).unsqueeze(1)
         lefy = torch.mean(torch.cat((output[:,11].unsqueeze(1),output[:,15].unsqueeze(1)),1),1).unsqueeze(1)
         rigy = torch.mean(torch.cat((output[:,10].unsqueeze(1),output[:,14].unsqueeze(1)),1),1).unsqueeze(1)
-        flat_out = torch.cat((topx,lefy,botx,rigy),1)
+        # get approx 2D bbox for front of pred object
+        topx2 = torch.mean(torch.cat((output[:,0].unsqueeze(1),output[:,1].unsqueeze(1)),1),1).unsqueeze(1)
+        botx2 = torch.mean(torch.cat((output[:,4].unsqueeze(1),output[:,5].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy2 = torch.mean(torch.cat((output[:,8].unsqueeze(1),output[:,12].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy2 = torch.mean(torch.cat((output[:,9].unsqueeze(1),output[:,13].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for bottom of pred object (front of object is considered top)
+        topx3 = torch.mean(torch.cat((output[:,4].unsqueeze(1),output[:,5].unsqueeze(1)),1),1).unsqueeze(1)
+        botx3 = torch.mean(torch.cat((output[:,7].unsqueeze(1),output[:,6].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy3 = torch.mean(torch.cat((output[:,12].unsqueeze(1),output[:,15].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy3 = torch.mean(torch.cat((output[:,13].unsqueeze(1),output[:,14].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for top of pred object (front of object is considered top)
+        topx4 = torch.mean(torch.cat((output[:,0].unsqueeze(1),output[:,1].unsqueeze(1)),1),1).unsqueeze(1)
+        botx4 = torch.mean(torch.cat((output[:,2].unsqueeze(1),output[:,3].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy4 = torch.mean(torch.cat((output[:,8].unsqueeze(1),output[:,11].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy4 = torch.mean(torch.cat((output[:,9].unsqueeze(1),output[:,10].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for right of pred object (when viewed st back = right side)
+        topx5 = torch.mean(torch.cat((output[:,0].unsqueeze(1),output[:,3].unsqueeze(1)),1),1).unsqueeze(1)
+        botx5 = torch.mean(torch.cat((output[:,4].unsqueeze(1),output[:,7].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy5 = torch.mean(torch.cat((output[:,8].unsqueeze(1),output[:,12].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy5 = torch.mean(torch.cat((output[:,11].unsqueeze(1),output[:,15].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for left of pred object (when viewed st back = right side)
+        topx6 = torch.mean(torch.cat((output[:,1].unsqueeze(1),output[:,2].unsqueeze(1)),1),1).unsqueeze(1)
+        botx6 = torch.mean(torch.cat((output[:,5].unsqueeze(1),output[:,6].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy6 = torch.mean(torch.cat((output[:,9].unsqueeze(1),output[:,13].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy6 = torch.mean(torch.cat((output[:,10].unsqueeze(1),output[:,14].unsqueeze(1)),1),1).unsqueeze(1)
         
-        # get approx 2D bboc for back of target
-        topx2 = torch.mean(torch.cat((target[:,2].unsqueeze(1),target[:,3].unsqueeze(1)),1),1).unsqueeze(1)
-        botx2 = torch.mean(torch.cat((target[:,6].unsqueeze(1),target[:,7].unsqueeze(1)),1),1).unsqueeze(1)
-        lefy2 = torch.mean(torch.cat((target[:,11].unsqueeze(1),target[:,15].unsqueeze(1)),1),1).unsqueeze(1)
-        rigy2 = torch.mean(torch.cat((target[:,10].unsqueeze(1),target[:,14].unsqueeze(1)),1),1).unsqueeze(1)
-        flat_targ = torch.cat((topx2,lefy2,botx2,rigy2),1)
         
+        flat_out  = torch.cat((topx,lefy,botx,rigy),1)
+        flat_out2 = torch.cat((topx2,lefy2,botx2,rigy2),1)
+        flat_out3 = torch.cat((topx3,lefy3,botx3,rigy3),1)
+        flat_out4  = torch.cat((topx4,lefy4,botx4,rigy4),1)
+        flat_out5 = torch.cat((topx5,lefy5,botx5,rigy5),1)
+        flat_out6 = torch.cat((topx6,lefy6,botx6,rigy6),1)
+        #concat front, back and bottom
+        flat_out = torch.cat((flat_out,flat_out2,flat_out3,flat_out4,flat_out5,flat_out6),0)
+        
+        
+        # get approx 2D bbox for back of target
+        topx7 = torch.mean(torch.cat((target[:,2].unsqueeze(1),target[:,3].unsqueeze(1)),1),1).unsqueeze(1)
+        botx7 = torch.mean(torch.cat((target[:,6].unsqueeze(1),target[:,7].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy7 = torch.mean(torch.cat((target[:,11].unsqueeze(1),target[:,15].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy7 = torch.mean(torch.cat((target[:,10].unsqueeze(1),target[:,14].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for front of target
+        topx8 = torch.mean(torch.cat((target[:,0].unsqueeze(1),target[:,1].unsqueeze(1)),1),1).unsqueeze(1)
+        botx8 = torch.mean(torch.cat((target[:,4].unsqueeze(1),target[:,5].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy8 = torch.mean(torch.cat((target[:,8].unsqueeze(1),target[:,12].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy8 = torch.mean(torch.cat((target[:,9].unsqueeze(1),target[:,13].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for bottom of object (front of object is considered top)
+        topx9 = torch.mean(torch.cat((target[:,4].unsqueeze(1),target[:,5].unsqueeze(1)),1),1).unsqueeze(1)
+        botx9 = torch.mean(torch.cat((target[:,7].unsqueeze(1),target[:,6].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy9 = torch.mean(torch.cat((target[:,12].unsqueeze(1),target[:,15].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy9 = torch.mean(torch.cat((target[:,13].unsqueeze(1),target[:,14].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for top of pred object (front of object is considered top)
+        topx10 = torch.mean(torch.cat((target[:,0].unsqueeze(1),target[:,1].unsqueeze(1)),1),1).unsqueeze(1)
+        botx10 = torch.mean(torch.cat((target[:,2].unsqueeze(1),target[:,3].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy10 = torch.mean(torch.cat((target[:,8].unsqueeze(1),target[:,11].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy10 = torch.mean(torch.cat((target[:,9].unsqueeze(1),target[:,10].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for right of pred object (when viewed st back = right side)
+        topx11 = torch.mean(torch.cat((target[:,0].unsqueeze(1),target[:,3].unsqueeze(1)),1),1).unsqueeze(1)
+        botx11 = torch.mean(torch.cat((target[:,4].unsqueeze(1),target[:,7].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy11 = torch.mean(torch.cat((target[:,8].unsqueeze(1),target[:,12].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy11 = torch.mean(torch.cat((target[:,11].unsqueeze(1),target[:,15].unsqueeze(1)),1),1).unsqueeze(1)
+        # get approx 2D bbox for left of pred object (when viewed st back = right side)
+        topx12 = torch.mean(torch.cat((target[:,1].unsqueeze(1),target[:,2].unsqueeze(1)),1),1).unsqueeze(1)
+        botx12 = torch.mean(torch.cat((target[:,5].unsqueeze(1),target[:,6].unsqueeze(1)),1),1).unsqueeze(1)
+        lefy12 = torch.mean(torch.cat((target[:,9].unsqueeze(1),target[:,13].unsqueeze(1)),1),1).unsqueeze(1)
+        rigy12 = torch.mean(torch.cat((target[:,10].unsqueeze(1),target[:,14].unsqueeze(1)),1),1).unsqueeze(1)
+        
+        
+        
+        flat_targ  = torch.cat((topx7,lefy7,botx7,rigy7),1)
+        flat_targ2 = torch.cat((topx8,lefy8,botx8,rigy8),1)
+        flat_targ3 = torch.cat((topx9,lefy9,botx9,rigy9),1)
+        flat_targ4  = torch.cat((topx10,lefy10,botx10,rigy10),1)
+        flat_targ5 = torch.cat((topx11,lefy11,botx11,rigy11),1)
+        flat_targ6 = torch.cat((topx12,lefy12,botx12,rigy12),1)
+
+        
+        #concat front and back
+        flat_targ = torch.cat((flat_targ,flat_targ2,flat_targ3,flat_targ4,flat_targ5,flat_targ6),0)
+
         dummy_mask = torch.ones(flat_targ.shape,requires_grad = True).to(device)
         box_loss = Box_Loss()
-        back_loss = box_loss(flat_out,flat_targ,dummy_mask)
         
-        # repeat for front of object
-        # get approx 2D bbox for back of pred object
-        topx3 = torch.mean(torch.cat((output[:,0].unsqueeze(1),output[:,1].unsqueeze(1)),1),1).unsqueeze(1)
-        botx3 = torch.mean(torch.cat((output[:,4].unsqueeze(1),output[:,5].unsqueeze(1)),1),1).unsqueeze(1)
-        lefy3 = torch.mean(torch.cat((output[:,8].unsqueeze(1),output[:,12].unsqueeze(1)),1),1).unsqueeze(1)
-        rigy3 = torch.mean(torch.cat((output[:,9].unsqueeze(1),output[:,13].unsqueeze(1)),1),1).unsqueeze(1)
-        flat_out2 = torch.cat((topx3,lefy3,botx3,rigy3),1)
-        
-        # get approx 2D bboc for back of target
-        topx4 = torch.mean(torch.cat((target[:,0].unsqueeze(1),target[:,1].unsqueeze(1)),1),1).unsqueeze(1)
-        botx4 = torch.mean(torch.cat((target[:,4].unsqueeze(1),target[:,5].unsqueeze(1)),1),1).unsqueeze(1)
-        lefy4 = torch.mean(torch.cat((target[:,8].unsqueeze(1),target[:,12].unsqueeze(1)),1),1).unsqueeze(1)
-        rigy4 = torch.mean(torch.cat((target[:,9].unsqueeze(1),target[:,13].unsqueeze(1)),1),1).unsqueeze(1)
-        flat_targ2 = torch.cat((topx4,lefy4,botx4,rigy4),1)
-        front_loss = box_loss(flat_out2,flat_targ2,dummy_mask)
-       
-        
-        return (back_loss + front_loss)/2.0
+        return box_loss(flat_out,flat_targ,dummy_mask)
+
     
 
 class FocalLoss(nn.Module): # from https://github.com/clcarwin/focal_loss_pytorch/blob/master/focalloss.py
@@ -851,7 +910,7 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = "trial2_bad_but_actually_something.pt"
+    checkpoint_file = None #"trial2_checkpoint_40.pt"
     start_epoch = 0
     num_epochs = 100
     
@@ -903,7 +962,7 @@ if __name__ == "__main__":
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.00750,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.01,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
     
@@ -926,4 +985,4 @@ if __name__ == "__main__":
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     
-    plot_batch(model,next(iter(trainloader)))
+    plot_batch(model,next(iter(testloader)))
