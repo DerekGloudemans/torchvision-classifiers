@@ -962,7 +962,7 @@ if __name__ == "__main__":
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.01,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.02,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
     
