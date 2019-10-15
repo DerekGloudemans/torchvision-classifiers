@@ -587,8 +587,8 @@ def train_model(model, cls_criterion,reg_criterion, optimizer, scheduler,
 
 def plot_batch(model,batch):
     model.eval()
-    correct_labels = batch[1][2].data.numpy()
-    correct_classes = batch[1][0].data.numpy()
+    correct_labels = batch[1][2].data.cpu().numpy()
+    correct_classes = batch[1][0].data.cpu().numpy()
     batch = batch[0].to(device)
     cls_outs, reg_out = model(batch)
     _, cls_out = torch.max(cls_outs,1)
