@@ -405,9 +405,9 @@ class Test_Dataset_3D(data.Dataset):
         new_y = np.zeros([4]) 
 
         new_y[0] = (bbox_3d[1,0]  +bbox_3d[1,1])/2
-        new_y[3] = (bbox_3d[1,2] +bbox_3d[1,3])/2
-        new_y[1] = (bbox_3d[1,4] +bbox_3d[1,5])/2
-        new_y[2] = (bbox_3d[1,6] +bbox_3d[1,7])/2
+        new_y[1] = (bbox_3d[1,2] +bbox_3d[1,3])/2
+        new_y[2] = (bbox_3d[1,4] +bbox_3d[1,5])/2
+        new_y[3] = (bbox_3d[1,6] +bbox_3d[1,7])/2
 
         bbox_3d = np.concatenate((new_x,new_y),0)
         bbox_3d = torch.from_numpy(bbox_3d).float()
@@ -598,7 +598,7 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
         print('-' * 10)
 
         # Each epoch has a training and validation phase
-        for phase in ['train']:#, 'val']:
+        for phase in ['train', 'val']:
             if phase == 'train':
                 if epoch > 0:
                     scheduler.step()
@@ -641,7 +641,7 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
     
                 # verbose update
                 count += 1
-                if count % 10 == 0:
+                if count % 500 == 0:
                     #print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
                     print("iou loss: {}   MSE loss: {}".format(reg_loss1.item(),reg_loss2.item()))
             
@@ -654,8 +654,8 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
                 phase, epoch_loss, epoch_acc))
 
             # deep copy the model
-            if phase == 'val' and epoch_acc > best_acc:
-                best_acc = epoch_acc
+            if phase == 'val' and epoch_loss < best_acc:
+                best_acc = epoch_loss
                 del best_model_wts
                 best_model_wts = copy.deepcopy(model.state_dict())
 
@@ -663,7 +663,7 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
         
         if epoch % 5 == 0:
             # save checkpoint
-            PATH = "trial3_checkpoint_{}.pt".format(epoch)
+            PATH = "trial4_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -711,7 +711,7 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
         new_out[[14,15]] = bbox[7]
         bbox = new_out.reshape(2,-1)
         
-        if True:   #plot correct labels instead
+        if False:   #plot correct labels instead
             new_out = np.zeros(16)
             correct_label = correct_labels[i]
             new_out[0:4] = correct_label[0:4]
@@ -784,19 +784,25 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
     torch.cuda.empty_cache()
     
 
-class Box_Loss(nn.Module):        
+class Flip_Box_Loss(nn.Module):        
     def __init__(self):
-        super(Box_Loss,self).__init__()
+        super(Flip_Box_Loss,self).__init__()
         
-    def forward(self,output,target,mask,epsilon = 1e-07):
+    def forward(self,output,target,epsilon = 1e-07):
         """ Compute the bbox iou loss for target vs output using tensors to preserve
-        gradients for efficient backpropogation"""
+        gradients for efficient backpropogation. input [x1,y_top,x2,y_bottom] where
+        either x1 or x2 may be on the left for an example depending on 3D object
+        orientation"""
         
-        # minx miny maxx maxy
-        minx,_ = torch.max(torch.cat((output[:,0].unsqueeze(1),target[:,0].unsqueeze(1)),1),1)
-        miny,_ = torch.max(torch.cat((output[:,1].unsqueeze(1),target[:,1].unsqueeze(1)),1),1)
-        maxx,_ = torch.min(torch.cat((output[:,2].unsqueeze(1),target[:,2].unsqueeze(1)),1),1)
-        maxy,_ = torch.min(torch.cat((output[:,3].unsqueeze(1),target[:,3].unsqueeze(1)),1),1)
+        # 0 if x1 > x2, 1 if x1 < x2
+        _, x1_on_left = torch.max(target[:,0:2],1)
+        x1_on_left = x1_on_left.float()
+        
+        # compute areas as though x1 < x2
+        minx,_ = torch.max(torch.cat((output[:,0].unsqueeze(1),target[:,0].unsqueeze(1)),1),1) # left x
+        maxx,_ = torch.min(torch.cat((output[:,2].unsqueeze(1),target[:,2].unsqueeze(1)),1),1) # right x
+        miny,_ = torch.max(torch.cat((output[:,1].unsqueeze(1),target[:,1].unsqueeze(1)),1),1) # top y
+        maxy,_ = torch.min(torch.cat((output[:,3].unsqueeze(1),target[:,3].unsqueeze(1)),1),1) # bottom y
 
         zeros = torch.zeros(minx.shape).unsqueeze(1).to(device)
         delx,_ = torch.max(torch.cat(((maxx-minx).unsqueeze(1),zeros),1),1)
@@ -804,13 +810,26 @@ class Box_Loss(nn.Module):
         intersection = torch.mul(delx,dely)
         a1 = torch.mul(output[:,2]-output[:,0],output[:,3]-output[:,1])
         a2 = torch.mul(target[:,2]-target[:,0],target[:,3]-target[:,1])
-        #a1,_ = torch.max(torch.cat((a1.unsqueeze(1),zeros),1),1)
-        #a2,_ = torch.max(torch.cat((a2.unsqueeze(1),zeros),1),1)
         union = a1 + a2 - intersection 
         iou = intersection / (union + epsilon)
-        #iou = torch.clamp(iou,0)
-        mask_sum = mask.sum()
-        return 1- iou.sum()/(mask_sum+epsilon)
+        
+        # compute areas as though x1 > x2
+        maxx2,_ = torch.min(torch.cat((output[:,0].unsqueeze(1),target[:,0].unsqueeze(1)),1),1) # left x
+        minx2,_ = torch.max(torch.cat((output[:,2].unsqueeze(1),target[:,2].unsqueeze(1)),1),1) # right x
+        miny2,_ = torch.max(torch.cat((output[:,1].unsqueeze(1),target[:,1].unsqueeze(1)),1),1) # top y
+        maxy2,_ = torch.min(torch.cat((output[:,3].unsqueeze(1),target[:,3].unsqueeze(1)),1),1) # bottom y
+
+        delx2,_ = torch.max(torch.cat(((maxx2-minx2).unsqueeze(1),zeros),1),1)
+        dely2,_ = torch.max(torch.cat(((maxy2-miny2).unsqueeze(1),zeros),1),1)
+        intersection2 = torch.mul(delx2,dely2)
+        a12 = torch.mul(output[:,0]-output[:,2],output[:,3]-output[:,1])
+        a22 = torch.mul(target[:,0]-target[:,2],target[:,3]-target[:,1])
+        union2 = a12 + a22 - intersection2
+        iou2 = intersection2 / (union2 + epsilon)
+        
+        total_iou = torch.mul(iou,x1_on_left) + torch.mul(iou2,1-x1_on_left)
+        return 1- total_iou.sum()/(output.shape[0]+epsilon)
+
     
 class Front_Back_Loss(nn.Module):
     def __init__(self):
@@ -819,48 +838,57 @@ class Front_Back_Loss(nn.Module):
     def forward(self,output,target,epsilon = 1e-07):
         """ Computes 2D bbox iou for front and back bbox prediction and compares
         with target"""
+        
+        
         # get approx 2D bbox for back of pred object
         lefx = output[:,3].unsqueeze(1)
         rigx = output[:,2].unsqueeze(1)
-        boty = output[:,6].unsqueeze(1)
+        boty = output[:,5].unsqueeze(1)
         topy = output[:,7].unsqueeze(1)
         # get approx 2D bbox for front of pred object
         lefx2 = output[:,0].unsqueeze(1)
         rigx2 = output[:,1].unsqueeze(1)
-        boty2 = output[:,5].unsqueeze(1)
+        boty2 = output[:,6].unsqueeze(1)
         topy2 = output[:,4].unsqueeze(1)
-        # get approx 2D bbox for bottom of pred object (front of object is considered top)
+        # get 2D bbox for overall vehicle
+#        minx = torch.min(output[:,0:4],1)[0].unsqueeze(1)
+#        maxx = torch.max(output[:,0:4],1)[0].unsqueeze(1)
+#        miny = torch.min(output[:,4:8],1)[0].unsqueeze(1)
+#        maxy = torch.max(output[:,4:8],1)[0].unsqueeze(1)
         
-        
-        
-        flat_out   = torch.cat((lefx,topy,rigx,boty),1)
-        flat_out2  = torch.cat((lefx2,topy2,rigx2,boty2),1)        
-
-        #concat front, back 
-        flat_out = torch.cat((flat_out,flat_out2),0)
+        #concat front, back, overall 
+        flat_out1   = torch.cat((lefx,topy,rigx,boty),1)
+        flat_out2  = torch.cat((lefx2,topy2,rigx2,boty2),1)
+#        flat_out3 = torch.cat((minx,miny,maxx,maxy),1)
+        flat_out = torch.cat((flat_out1,flat_out2),0)
         
         
         # get approx 2D bbox for back of target
         lefx4 = target[:,3].unsqueeze(1)
         rigx4 = target[:,2].unsqueeze(1)
-        boty4 = target[:,6].unsqueeze(1)
+        boty4 = target[:,5].unsqueeze(1)
         topy4 = target[:,7].unsqueeze(1)
         # get approx 2D bbox for front of pred object
         lefx5 = target[:,0].unsqueeze(1)
         rigx5 = target[:,1].unsqueeze(1)
-        boty5 = target[:,5].unsqueeze(1)
+        boty5 = target[:,6].unsqueeze(1)
         topy5 = target[:,4].unsqueeze(1)
+        # get 2D bbox for overall vehicle
+#        minx2 = torch.min(target[:,0:4],1)[0].unsqueeze(1)
+#        maxx2 = torch.max(target[:,0:4],1)[0].unsqueeze(1)
+#        miny2 = torch.min(target[:,4:8],1)[0].unsqueeze(1)
+#        maxy2 = torch.max(target[:,4:8],1)[0].unsqueeze(1)
         
-        
-        flat_targ   = torch.cat((lefx4,topy4,rigx4,boty4),1)
-        flat_targ2  = torch.cat((lefx5,topy5,rigx5,boty5),1)
         #concat front and back
-        flat_targ = torch.cat((flat_targ,flat_targ2),0)
+        flat_targ1  = torch.cat((lefx4,topy4,rigx4,boty4),1)
+        flat_targ2  = torch.cat((lefx5,topy5,rigx5,boty5),1)
+#        flat_targ3 = torch.cat((minx2,miny2,maxx2,maxy2),1)
+                
+        flat_targ = torch.cat((flat_targ1,flat_targ2),0)
 
-        dummy_mask = torch.ones(flat_targ.shape,requires_grad = True).to(device)
-        box_loss = Box_Loss()
+        flip_box_loss = Flip_Box_Loss()
         
-        return box_loss(flat_out,flat_targ,dummy_mask)
+        return flip_box_loss(flat_out,flat_targ)
 
         
 
@@ -872,9 +900,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file =  None
+    checkpoint_file = None# "trial4_checkpoint_10.pt"
     start_epoch = 0
-    num_epochs = 30
+    num_epochs = 100
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -924,9 +952,9 @@ if __name__ == "__main__":
     
     # all parameters are being optimized, not just fc layer
     #optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.02,momentum = 0.9)    
+    optimizer = optim.SGD(model.parameters(), lr=0.01,momentum = 0.9)    
     # Decay LR by a factor of 0.5 every epoch
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.9)
     
 
     # if checkpoint specified, load model and optimizer weights from checkpoint
@@ -940,11 +968,11 @@ if __name__ == "__main__":
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training on {}.".format(device))
         model = train_model(model, reg_criterion,reg_criterion2, optimizer, 
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     
-    plot_batch(model,next(iter(trainloader)))
+    plot_batch(model,next(iter(testloader)))
