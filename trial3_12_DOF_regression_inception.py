@@ -145,11 +145,12 @@ class Train_Dataset_3D(data.Dataset):
         cls =  self.class_dict[cls.lower()]
         
         # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
-        im,bbox_2d,bbox_3d = self.random_scale_crop(im,bbox_2d,bbox_3d,imsize = 224, tighten = 0)
+        im,bbox_2d,bbox_3d = self.random_scale_crop(im,bbox_2d,bbox_3d,imsize = 299, tighten = 0)
         
         # normalize and convert image to tensor
         X = self.transforms(im)
-                
+        X = X[:,:-1,:-1]
+        assert X.shape == (3,299,299), "Error: {}".format(X.shape)        
         # normalize 2d and 3d corners wrt image size and convert to tensor
         # pad to wer times image size because bbox may fall outside of visible coordinates
         bbox_2d[0] = (bbox_2d[0]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
@@ -180,7 +181,7 @@ class Train_Dataset_3D(data.Dataset):
         
         return X, y
     
-    def random_scale_crop(self,im,bb2d,bb3d,imsize = 224,tighten = 0):
+    def random_scale_crop(self,im,bb2d,bb3d,imsize = 299,tighten = 0):
         """
         Performs transforms that affect both X and y, as the transforms package 
         of torchvision doesn't do this elegantly
@@ -263,7 +264,8 @@ class Train_Dataset_3D(data.Dataset):
             crop_x = im.size[0]/2 - imsize/2 # center
         if crop_y > im.size[0] - imsize - pad:
             crop_y = im.size[0]/2 - imsize/2 # center  
-        im = transforms.functional.crop(im,crop_y,crop_x,imsize,imsize)
+            # add 1 because 299 gets cropped to 300 anyway for some reason, so we'll crop it again later
+        im = transforms.functional.crop(im,crop_y,crop_x,imsize+1,imsize+1)
         
         # transform bbox points into cropped coords
         bbox_2d[0] = bbox_2d[0] - crop_x
@@ -290,7 +292,7 @@ class Train_Dataset_3D(data.Dataset):
         cls = self.class_dict[cls.lower()]
         
         # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
-        im,bbox_2d,bbox_3d = self.random_scale_crop(im,bbox_2d,bbox_3d,imsize = 224, tighten = 0)
+        im,bbox_2d,bbox_3d = self.random_scale_crop(im,bbox_2d,bbox_3d,imsize = 299, tighten = 0)
         
         im_array = np.array(im)
         
@@ -375,7 +377,7 @@ class Test_Dataset_3D(data.Dataset):
         cls = self.class_dict[cls.lower()]
         
         # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
-        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224)
+        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 299)
         
         # normalize and convert image to tensor
         X = self.transforms(im)
@@ -405,7 +407,7 @@ class Test_Dataset_3D(data.Dataset):
         return X, y
     
     
-    def scale_crop(self,im,bb2d,bb3d,imsize = 224):
+    def scale_crop(self,im,bb2d,bb3d,imsize = 299):
         """
         center-crop image and adjust labels accordingly
         """
@@ -486,7 +488,7 @@ class Test_Dataset_3D(data.Dataset):
         cls = self.class_dict[cls.lower()]
         
         # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
-        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224)
+        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 299)
         
         im_array = np.array(im)
         
@@ -528,11 +530,10 @@ class CNNnet(nn.Module):
         super(CNNnet, self).__init__()
         
         # remove last layers of vgg19 model, save first fc layer and maxpool layer
-        self.vgg = models.vgg19(pretrained=True)
-        del self.vgg.classifier[2:]
+        self.inception = models.inception_v3(pretrained=True,aux_logits = False)
 
         # get size of some layers
-        start_num = self.vgg.classifier[0].out_features
+        start_num = self.inception.fc.out_features
         mid_num = int(np.sqrt(start_num))
         reg_out_num = 12 # bounding box coords
         
@@ -552,8 +553,8 @@ class CNNnet(nn.Module):
         a Tensor of output data. We can use Modules defined in the constructor as
         well as arbitrary operators on Tensors.
         """
-        vgg_out = self.vgg(x)
-        reg_out = self.regressor(vgg_out)
+        inception_out = self.inception(x)
+        reg_out = self.regressor(inception_out)
         
         return reg_out
 
@@ -596,8 +597,9 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
                 with torch.set_grad_enabled(phase == 'train'):
                     reg_outputs = model(inputs)
                     # intially weight MSE highly but decrease over time, and regularize to 1
-                    reg_loss = (reg_criterion(reg_outputs,reg_target) + 3*reg_criterion2(reg_outputs,reg_target))/4.0
-                    
+                    reg_loss1 = reg_criterion(reg_outputs,reg_target) 
+                    reg_loss2 = reg_criterion2(reg_outputs,reg_target)
+                    reg_loss = reg_loss1 + reg_loss2
                     # backward + optimize only if in training phase
                     if phase == 'train':
                         reg_loss.backward(retain_graph = True)
@@ -615,9 +617,9 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
     
                 # verbose update
                 count += 1
-                if count % 100 == 0:
+                if count % 10 == 0:
                     #print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
-                    print("reg: {}".format(reg_loss.item()))
+                    print("iou loss: {}.  MSE loss: {}".format(reg_loss1.item(),reg_loss2.item()))
             
             torch.cuda.empty_cache()
             epoch_loss = running_loss / dataset_sizes[phase]
@@ -637,7 +639,7 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
         
         if epoch % 5 == 0:
             # save checkpoint
-            PATH = "trial3_checkpoint_{}.pt".format(epoch)
+            PATH = "trial3_inception_checkpoint_{}.pt".format(epoch)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -702,7 +704,7 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
 #        label = "{}".format(class_dict[int(correct_classes[i,0])])
         label = "dummy"
         # transform bbox coords back into im pixel coords
-        bbox = np.round(bbox* 224*wer - 224*(wer-1)/2)
+        bbox = np.round(bbox* 299*wer - 299*(wer-1)/2)
         # plot bboxes
         
         if True:
@@ -843,9 +845,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file =  "trial3_checkpoint_40.pt"
+    checkpoint_file =  "trial3_inception_checkpoint_5.pt"
     start_epoch = 0
-    num_epochs = 100
+    num_epochs = 50
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -911,7 +913,7 @@ if __name__ == "__main__":
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training on {}.".format(device))
         model = train_model(model, reg_criterion,reg_criterion2, optimizer, 
