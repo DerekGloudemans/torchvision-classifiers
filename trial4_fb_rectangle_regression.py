@@ -641,7 +641,7 @@ def train_model(model, reg_criterion,reg_criterion2, optimizer, scheduler,
     
                 # verbose update
                 count += 1
-                if count % 500 == 0:
+                if count % 50 == 0:
                     #print("on minibatch {} -- correct: {} -- avg bbox iou: {} ".format(count,correct,bbox_acc))
                     print("iou loss: {}   MSE loss: {}".format(reg_loss1.item(),reg_loss2.item()))
             
@@ -830,6 +830,7 @@ class Flip_Box_Loss(nn.Module):
         total_iou = torch.mul(iou,x1_on_left) + torch.mul(iou2,1-x1_on_left)
         return 1- total_iou.sum()/(output.shape[0]+epsilon)
 
+
     
 class Front_Back_Loss(nn.Module):
     def __init__(self):
@@ -851,16 +852,16 @@ class Front_Back_Loss(nn.Module):
         boty2 = output[:,6].unsqueeze(1)
         topy2 = output[:,4].unsqueeze(1)
         # get 2D bbox for overall vehicle
-#        minx = torch.min(output[:,0:4],1)[0].unsqueeze(1)
-#        maxx = torch.max(output[:,0:4],1)[0].unsqueeze(1)
-#        miny = torch.min(output[:,4:8],1)[0].unsqueeze(1)
-#        maxy = torch.max(output[:,4:8],1)[0].unsqueeze(1)
+        minx = torch.min(output[:,0:4],1)[0].unsqueeze(1)
+        maxx = torch.max(output[:,0:4],1)[0].unsqueeze(1)
+        miny = torch.min(output[:,4:8],1)[0].unsqueeze(1)
+        maxy = torch.max(output[:,4:8],1)[0].unsqueeze(1)
         
         #concat front, back, overall 
         flat_out1   = torch.cat((lefx,topy,rigx,boty),1)
         flat_out2  = torch.cat((lefx2,topy2,rigx2,boty2),1)
-#        flat_out3 = torch.cat((minx,miny,maxx,maxy),1)
-        flat_out = torch.cat((flat_out1,flat_out2),0)
+        flat_out3 = torch.cat((minx,miny,maxx,maxy),1)
+        flat_out = torch.cat((flat_out1,flat_out2,flat_out3),0)
         
         
         # get approx 2D bbox for back of target
@@ -874,17 +875,17 @@ class Front_Back_Loss(nn.Module):
         boty5 = target[:,6].unsqueeze(1)
         topy5 = target[:,4].unsqueeze(1)
         # get 2D bbox for overall vehicle
-#        minx2 = torch.min(target[:,0:4],1)[0].unsqueeze(1)
-#        maxx2 = torch.max(target[:,0:4],1)[0].unsqueeze(1)
-#        miny2 = torch.min(target[:,4:8],1)[0].unsqueeze(1)
-#        maxy2 = torch.max(target[:,4:8],1)[0].unsqueeze(1)
+        minx2 = torch.min(target[:,0:4],1)[0].unsqueeze(1)
+        maxx2 = torch.max(target[:,0:4],1)[0].unsqueeze(1)
+        miny2 = torch.min(target[:,4:8],1)[0].unsqueeze(1)
+        maxy2 = torch.max(target[:,4:8],1)[0].unsqueeze(1)
         
         #concat front and back
         flat_targ1  = torch.cat((lefx4,topy4,rigx4,boty4),1)
         flat_targ2  = torch.cat((lefx5,topy5,rigx5,boty5),1)
-#        flat_targ3 = torch.cat((minx2,miny2,maxx2,maxy2),1)
+        flat_targ3 = torch.cat((minx2,miny2,maxx2,maxy2),1)
                 
-        flat_targ = torch.cat((flat_targ1,flat_targ2),0)
+        flat_targ = torch.cat((flat_targ1,flat_targ2,flat_targ3),0)
 
         flip_box_loss = Flip_Box_Loss()
         
@@ -900,9 +901,9 @@ if __name__ == "__main__":
         pass
     
     # define start epoch for consistent labeling if checkpoint is reloaded
-    checkpoint_file = None# "trial4_checkpoint_10.pt"
+    checkpoint_file =  None
     start_epoch = 0
-    num_epochs = 100
+    num_epochs = 50
     
     # use this to watch gpu in console            watch -n 2 nvidia-smi
     
@@ -975,4 +976,4 @@ if __name__ == "__main__":
                             exp_lr_scheduler, dataloaders,datasizes,
                             num_epochs, start_epoch)
     
-    plot_batch(model,next(iter(testloader)))
+    plot_batch(model,next(iter(trainloader)))
