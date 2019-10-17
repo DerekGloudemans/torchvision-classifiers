@@ -59,14 +59,18 @@ global wer #window expansion size, controls how far out of frame bbox can be pre
 wer = 2
     
 #--------------------------- Definitions section -----------------------------#
-class Train_Dataset_3D(data.Dataset):
+class Synthetic_Dataset_3D(data.Dataset):
     """
     Defines dataset and transforms for training data. The positive images and 
     negative images are stored in two different directories
     """
-    def __init__(self,directory, max_scaling = 2):
+    def __init__(self,directory, max_scaling = 4,mode= "train"):
 
-        self.im_dir = os.path.join(directory,"images")
+        if mode == "train":
+            self.im_dir = os.path.join(directory,"training_0")
+        elif mode == "test":
+            self.im_dir = os.path.join(directory,"testing_0")
+
         self.max_scaling = max_scaling
         self.class_dict = {
                 'car': 0,
@@ -81,45 +85,23 @@ class Train_Dataset_3D(data.Dataset):
         
         # use os module to get a list of training image files
         # note that shuffling in dataloader is essential because these are ordered
-        self.images =  [f for f in os.listdir(os.path.join(directory,"images"))]
+        self.images =  [f for f in os.listdir(self.im_dir)]
         self.images.sort()
         
-        with open(os.path.join(directory,"labels.cpkl"),'rb') as f:
-            self.labels = pickle.load(f)
+        with open(os.path.join(directory,"all_labels_0.cpkl"),'rb') as f:
+            self.labels = pickle.load(f) # dictionary keyed by image file name
         
-        
-        # get selection of examples with an equal number from each class
-        all_idx_lists = []
-        for key in self.class_dict.keys():
-            idx_list = []
-            for i in range(0,len(self.labels)):
-                if self.labels[i]['class'].lower() == key:
-                    idx_list.append(i)
-            all_idx_lists.append(idx_list)
-        
-        # find shortest idx_list
-        shortest = np.inf
-        for idx_list in all_idx_lists:
-            if len(idx_list) < shortest:
-                shortest = len(idx_list)
-        
-        # maximum class imbalance = 5 times        
-        shortest = shortest * 5
-        
-        # select examples
-        final_idx = []
-        for idx_list in all_idx_lists:        
-            final_idx = final_idx + idx_list[:shortest]    
-        new_images = []
-        new_labels = []
-        
-        # only select cars
-        for idx in all_idx_lists[0]:
-            new_images.append(self.images[idx])
-            new_labels.append(self.labels[idx])
-        self.labels = new_labels
-        self.images = new_images
-        
+        # remove all images for which label was not correctly added
+        removals = []
+        for item in self.images:
+            try:
+                self.labels[item]
+            except:
+                removals.append(item)
+        removals.reverse()
+        for item in removals:
+            self.images.remove(item)
+            
         # define transform
         self.transforms = transforms.Compose([\
         transforms.ToTensor(),
@@ -136,16 +118,15 @@ class Train_Dataset_3D(data.Dataset):
         
         # load relevant files
         im = Image.open(file_name).convert('RGB')
-        y = self.labels[index]
-        bbox_2d = y['bbox2d']
-        bbox_3d = y['bbox3d']
-        calib = y['calib']
-        cls = y['class']
+        y = self.labels[self.images[index]]
+        bbox_2d = y[1]
+        bbox_3d = y[2]
+        cls = y[0]
             
         cls =  self.class_dict[cls.lower()]
         
         # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
-        im,bbox_2d,bbox_3d = self.random_scale_crop(im,bbox_2d,bbox_3d,imsize = 224, tighten = 0)
+        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224, tighten = 0)
         
         # normalize and convert image to tensor
         X = self.transforms(im)
@@ -181,254 +162,11 @@ class Train_Dataset_3D(data.Dataset):
         bbox_3d = torch.clamp(bbox_3d,min = 0.0)
         bbox_3d = torch.clamp(bbox_3d,max = 1.0)
         
-        calib = torch.from_numpy(calib).float()
         cls = torch.LongTensor([cls])
         # y is a tuple of four tensors: cls,2dbbox, 3dbbox, and camera calibration matrix
-        y = (cls,bbox_2d,bbox_3d,calib)
+        y = (cls,bbox_2d,bbox_3d)
         
         return X, y
-    
-    def random_scale_crop(self,im,bb2d,bb3d,imsize = 224,tighten = 0):
-        """
-        Performs transforms that affect both X and y, as the transforms package 
-        of torchvision doesn't do this elegantly
-        inputs: im - image
-                 bb2d - 1 x 4 numpy array of bbox corners. the order is: 
-                    min x, min y, max x max y
-                bb3d - 2 x 8 numpy array of 3d bbox corners. first row is x, second row is y
-        outputs: im - transformed image
-                 bbox_2d - 1 x 4 numpy array of bbox corners and class
-                 new_corners_3d - 2 x 8 numpy array of bbox corners and class
-        """
-    
-        #define parameters for random transform
-        scale = min(self.max_scaling,max(random.gauss(1.5,0.5),imsize/min(im.size))) # verfify that scale will at least accomodate crop size
-        shear = 0 #(random.random()-0.5)*30 #angle
-        rotation = (random.random()-0.5) * 0#20.0 #angle
-        
-        # transform matrix
-        im = transforms.functional.affine(im,rotation,(0,0),scale,shear)
-        (xsize,ysize) = im.size
-        
-        
-            
-        # image transformation matrix
-        shear = math.radians(-shear)
-        rotation = math.radians(-rotation)
-        M = np.array([[scale*np.cos(rotation),-scale*np.sin(rotation+shear)], 
-                      [scale*np.sin(rotation), scale*np.cos(rotation+shear)]])
-        
-        
-        # add 5th point corresponding to image center
-        corners = np.array([[bb2d[0],bb2d[1]],[bb2d[2],bb2d[1]],
-                            [bb2d[2],bb2d[3]],[bb2d[0],bb2d[3]],
-                            [int(xsize/2),int(ysize/2)]])
-        new_corners = np.matmul(corners,M)
-        
-        # do the same thing for the 8 bb3d points
-        bb3d = np.transpose(bb3d)
-        new_corners_3d = np.matmul(bb3d,M)
-        new_corners_3d = np.transpose(new_corners_3d)
-        
-        # Resulting corners make a skewed, tilted rectangle - realign with axes
-        bbox_2d = np.ones(4)
-        bbox_2d[0] = np.min(new_corners[:4,0])
-        bbox_2d[1] = np.min(new_corners[:4,1])
-        bbox_2d[2] = np.max(new_corners[:4,0])
-        bbox_2d[3] = np.max(new_corners[:4,1])
-        
-        # shift so transformed image center aligns with original image center
-        xshift = xsize/2 - new_corners[4,0]
-        yshift = ysize/2 - new_corners[4,1]
-        bbox_2d[0] = bbox_2d[0] + xshift
-        bbox_2d[1] = bbox_2d[1] + yshift
-        bbox_2d[2] = bbox_2d[2] + xshift
-        bbox_2d[3] = bbox_2d[3] + yshift
-        
-        new_corners_3d[0,:] = new_corners_3d[0,:] + xshift
-        new_corners_3d[1,:] = new_corners_3d[1,:] + yshift
-        
-        # brings bboxes in slightly on positive examples
-        if tighten != 0:
-            xdiff = bbox_2d[2] - bbox_2d[0]
-            ydiff = bbox_2d[3] - bbox_2d[1]
-            bbox_2d[0] = bbox_2d[0] + xdiff*tighten
-            bbox_2d[1] = bbox_2d[1] + ydiff*tighten
-            bbox_2d[2] = bbox_2d[2] - xdiff*tighten
-            bbox_2d[3] = bbox_2d[3] - ydiff*tighten
-            
-        # get crop location with normal distribution at image center
-        crop_x = int(random.gauss(im.size[0]/2,xsize/10/scale)-imsize/2)
-        crop_y = int(random.gauss(im.size[1]/2,ysize/10/scale)-imsize/2)
-        
-        # move crop if too close to edge
-        pad = 50
-        if crop_x < pad:
-            crop_x = im.size[0]/2 - imsize/2 # center
-        if crop_y < pad:
-            crop_y = im.size[1]/2 - imsize/2 # center
-        if crop_x > im.size[0] - imsize - pad:
-            crop_x = im.size[0]/2 - imsize/2 # center
-        if crop_y > im.size[0] - imsize - pad:
-            crop_y = im.size[0]/2 - imsize/2 # center  
-        im = transforms.functional.crop(im,crop_y,crop_x,imsize,imsize)
-        
-        # transform bbox points into cropped coords
-        bbox_2d[0] = bbox_2d[0] - crop_x
-        bbox_2d[1] = bbox_2d[1] - crop_y
-        bbox_2d[2] = bbox_2d[2] - crop_x
-        bbox_2d[3] = bbox_2d[3] - crop_y
-        
-        new_corners_3d[0,:] = new_corners_3d[0,:] - crop_x
-        new_corners_3d[1,:] = new_corners_3d[1,:] - crop_y
-        
-        return im, bbox_2d, new_corners_3d
-    
-    def show(self, index,plot_3D = False):
-        #Generates one sample of data
-        file_name = os.path.join(self.im_dir,self.images[index])
-        
-        # load relevant files
-        im = Image.open(file_name).convert('RGB')
-        y = self.labels[index]
-        bbox_2d = y['bbox2d']
-        bbox_3d = y['bbox3d']
-        cls = y['class']
-            
-        cls = self.class_dict[cls.lower()]
-        
-        # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
-        im,bbox_2d,bbox_3d = self.random_scale_crop(im,bbox_2d,bbox_3d,imsize = 224, tighten = 0)
-        
-        im_array = np.array(im)
-        
-        if plot_3D:
-            new_im = im_array.copy()
-            coords = np.round(np.transpose(bbox_3d)).astype(int)
-            #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
-            edge_array= np.array([[0,1,0,1,1,0,0,0],
-                                  [1,0,1,0,0,1,0,0],
-                                  [0,1,0,1,0,0,1,1],
-                                  [1,0,1,0,0,0,1,1],
-                                  [1,0,0,0,0,1,0,1],
-                                  [0,1,0,0,1,0,1,0],
-                                  [0,0,1,0,0,1,0,1],
-                                  [0,0,0,1,1,0,1,0]])
-        
-            # plot lines between indicated corner points
-            for i in range(0,8):
-                for j in range(0,8):
-                    if edge_array[i,j] == 1:
-                        cv2.line(new_im,(coords[i,0],coords[i,1]),(coords[j,0],coords[j,1]),(10,230,160),1)
-        else:
-            bbox_2d = bbox_2d.astype(int)
-            new_im = cv2.rectangle(im_array,(bbox_2d[0],bbox_2d[1]),(bbox_2d[2],bbox_2d[3]),(10,230,160),2)
-        
-        plt.imshow(new_im)
-
-
-class Test_Dataset_3D(data.Dataset):
-    """
-    Defines dataset and transforms for testing data. The positive images and 
-    negative images are stored in two different directories
-    """
-    def __init__(self,directory):
-
-        self.im_dir = os.path.join(directory,"images")
-        self.class_dict = {
-                'car': 0,
-                'van': 1,
-                'truck': 2,
-                'pedestrian':3,
-                'person_sitting':4,
-                'cyclist':5,
-                'tram': 6,
-                'misc': 7,
-                'dontcare':8
-                }
-        
-        # use os module to get a list of training image files
-        # note that shuffling in dataloader is essential because these are ordered
-        self.images =  [f for f in os.listdir(os.path.join(directory,"images"))]
-        self.images.sort()
-        
-        with open(os.path.join(directory,"labels.cpkl"),'rb') as f:
-            self.labels = pickle.load(f)
-        
-        
-        self.labels = self.labels[0:6000]
-        self.images = self.images[0:6000]
-        
-        self.transforms = transforms.Compose([\
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
-    
-    def __len__(self):
-        #Denotes the total number of samples
-        return len(self.images) 
-
-    def __getitem__(self, index):
-        #Generates one sample of data
-        file_name = os.path.join(self.im_dir,self.images[index])
-        
-        # load relevant files
-        im = Image.open(file_name).convert('RGB')
-        y = self.labels[index]
-        bbox_2d = y['bbox2d']
-        bbox_3d = y['bbox3d']
-        calib = y['calib']
-        cls = y['class']
-            
-        cls = self.class_dict[cls.lower()]
-        
-        # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
-        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224)
-        
-        # normalize and convert image to tensor
-        X = self.transforms(im)
-        
-        ##### Fix after here
-        
-        # normalize 2d and 3d corners wrt image size and convert to tensor
-        # pad to wer times image size because bbox may fall outside of visible coordinates
-        bbox_2d[0] = (bbox_2d[0]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
-        bbox_2d[1] = (bbox_2d[1]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
-        bbox_2d[2] = (bbox_2d[2]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
-        bbox_2d[3] = (bbox_2d[3]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
-        bbox_2d = torch.from_numpy(bbox_2d).float()
-        
-        bbox_3d[0,:] = (bbox_3d[0,:]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
-        bbox_3d[1,:] = (bbox_3d[1,:]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
-        
-        new_x = bbox_3d[0,:4]
-        new_y = np.zeros([4]) 
-
-        new_y[0] = (bbox_3d[1,0]  +bbox_3d[1,1])/2
-        new_y[1] = (bbox_3d[1,2] +bbox_3d[1,3])/2
-        new_y[2] = (bbox_3d[1,4] +bbox_3d[1,5])/2
-        new_y[3] = (bbox_3d[1,6] +bbox_3d[1,7])/2
-
-        bbox_3d = np.concatenate((new_x,new_y),0)
-        bbox_3d = torch.from_numpy(bbox_3d).float()
-        
-        
-        # clamp to prevent really large anomalous values
-        bbox_3d = torch.clamp(bbox_3d,min = 0.0)
-        bbox_3d = torch.clamp(bbox_3d,max = 1.0)
-        
-        
-        
-        calib = torch.from_numpy(calib).float()
-        cls = torch.Tensor([cls])
-        
-        
-        
-        # y is a tuple of four tensors: cls,2dbbox, 3dbbox, and camera calibration matrix
-        y = (cls,bbox_2d,bbox_3d,calib)
-        
-        return X, y
-    
     
     def scale_crop(self,im,bb2d,bb3d,imsize = 224):
         """
@@ -497,21 +235,21 @@ class Test_Dataset_3D(data.Dataset):
         return im, bbox_2d, new_corners_3d
     
     
-    def show(self, index,plot_3D = False):
+    def show(self, index,plot_3D = True):
         #Generates one sample of data
         file_name = os.path.join(self.im_dir,self.images[index])
         
         # load relevant files
         im = Image.open(file_name).convert('RGB')
-        y = self.labels[index]
-        bbox_2d = y['bbox2d']
-        bbox_3d = y['bbox3d']
-        cls = y['class']
+        y = self.labels[self.images[index]]
+        bbox_2d = y[1]
+        bbox_3d = y[2]
+        cls = y[0]
             
         cls = self.class_dict[cls.lower()]
         
         # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
-        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224)
+        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224, tighten = 0)
         
         im_array = np.array(im)
         
@@ -538,6 +276,7 @@ class Test_Dataset_3D(data.Dataset):
             new_im = cv2.rectangle(im_array,(bbox_2d[0],bbox_2d[1]),(bbox_2d[2],bbox_2d[3]),(10,230,160),2)
         
         plt.imshow(new_im)
+
 
 class CNNnet(nn.Module):
     """
@@ -711,7 +450,7 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
         new_out[[14,15]] = bbox[7]
         bbox = new_out.reshape(2,-1)
         
-        if False:   #plot correct labels instead
+        if True:   #plot correct labels instead
             new_out = np.zeros(16)
             correct_label = correct_labels[i]
             new_out[0:4] = correct_label[0:4]
@@ -912,13 +651,10 @@ if __name__ == "__main__":
     device = torch.device("cuda:0" if use_cuda else "cpu")
     torch.cuda.empty_cache()    
     
-    if sys.platform == 'linux':
-        directory =  "/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed"#_cars_vans_only"
-    else:
-        directory = "C:\\Users\\derek\\Desktop\\KITTI\\3D_object_parsed"
+    directory = "/media/worklab/data_HDD/cv_data/Synthetic_car_model_ims"
         
-    train_data = Train_Dataset_3D(directory,max_scaling = 1.5)
-    test_data = Test_Dataset_3D(directory)
+    train_data = Synthetic_Dataset_3D(directory,max_scaling = 1.5,mode = "train")
+    test_data = Synthetic_Dataset_3D(directory, mode = "test")
 
     if False: # test the datasets
         idx = random.randint(0,len(train_data))
