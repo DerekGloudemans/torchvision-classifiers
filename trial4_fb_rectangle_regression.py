@@ -64,7 +64,7 @@ class Train_Dataset_3D(data.Dataset):
     Defines dataset and transforms for training data. The positive images and 
     negative images are stored in two different directories
     """
-    def __init__(self,directory, max_scaling = 2):
+    def __init__(self,directory, max_scaling = 1.25):
 
         self.im_dir = os.path.join(directory,"images")
         self.max_scaling = max_scaling
@@ -852,16 +852,16 @@ class Front_Back_Loss(nn.Module):
         boty2 = output[:,6].unsqueeze(1)
         topy2 = output[:,4].unsqueeze(1)
         # get 2D bbox for overall vehicle
-        minx = torch.min(output[:,0:4],1)[0].unsqueeze(1)
-        maxx = torch.max(output[:,0:4],1)[0].unsqueeze(1)
-        miny = torch.min(output[:,4:8],1)[0].unsqueeze(1)
-        maxy = torch.max(output[:,4:8],1)[0].unsqueeze(1)
+#        minx = torch.min(output[:,0:4],1)[0].unsqueeze(1)
+#        maxx = torch.max(output[:,0:4],1)[0].unsqueeze(1)
+#        miny = torch.min(output[:,4:8],1)[0].unsqueeze(1)
+#        maxy = torch.max(output[:,4:8],1)[0].unsqueeze(1)
         
         #concat front, back, overall 
         flat_out1   = torch.cat((lefx,topy,rigx,boty),1)
         flat_out2  = torch.cat((lefx2,topy2,rigx2,boty2),1)
-        flat_out3 = torch.cat((minx,miny,maxx,maxy),1)
-        flat_out = torch.cat((flat_out1,flat_out2,flat_out3),0)
+#        flat_out3 = torch.cat((minx,miny,maxx,maxy),1)
+        flat_out = torch.cat((flat_out1,flat_out2),0)
         
         
         # get approx 2D bbox for back of target
@@ -875,17 +875,17 @@ class Front_Back_Loss(nn.Module):
         boty5 = target[:,6].unsqueeze(1)
         topy5 = target[:,4].unsqueeze(1)
         # get 2D bbox for overall vehicle
-        minx2 = torch.min(target[:,0:4],1)[0].unsqueeze(1)
-        maxx2 = torch.max(target[:,0:4],1)[0].unsqueeze(1)
-        miny2 = torch.min(target[:,4:8],1)[0].unsqueeze(1)
-        maxy2 = torch.max(target[:,4:8],1)[0].unsqueeze(1)
+#        minx2 = torch.min(target[:,0:4],1)[0].unsqueeze(1)
+#        maxx2 = torch.max(target[:,0:4],1)[0].unsqueeze(1)
+#        miny2 = torch.min(target[:,4:8],1)[0].unsqueeze(1)
+#        maxy2 = torch.max(target[:,4:8],1)[0].unsqueeze(1)
         
         #concat front and back
         flat_targ1  = torch.cat((lefx4,topy4,rigx4,boty4),1)
         flat_targ2  = torch.cat((lefx5,topy5,rigx5,boty5),1)
-        flat_targ3 = torch.cat((minx2,miny2,maxx2,maxy2),1)
+#        flat_targ3 = torch.cat((minx2,miny2,maxx2,maxy2),1)
                 
-        flat_targ = torch.cat((flat_targ1,flat_targ2,flat_targ3),0)
+        flat_targ = torch.cat((flat_targ1,flat_targ2),0)
 
         flip_box_loss = Flip_Box_Loss()
         
@@ -969,7 +969,7 @@ if __name__ == "__main__":
     datasizes = {"train": len(train_data), "val": len(test_data)}
     
     
-    if False:    
+    if True:    
     # train model
         print("Beginning training on {}.".format(device))
         model = train_model(model, reg_criterion,reg_criterion2, optimizer, 
