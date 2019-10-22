@@ -99,11 +99,12 @@ class VGGBoxNet(nn.Module):
         # get size of some layers
         start_num = 25088
         mid_num = int(np.sqrt(start_num))
-        reg_out_num = 11 # bounding box coords
+        reg_out_num = 9 # bounding box coords
         
         # define regressor
         self.vgg.classifier = nn.Sequential(
                           nn.Linear(start_num,mid_num,bias=True),
+                          nn.BatchNorm1d(mid_num),
                           nn.ReLU(),
                           nn.Linear(mid_num,reg_out_num,bias = True),
                           nn.BatchNorm1d(reg_out_num),
@@ -383,9 +384,9 @@ Using the pytorch dataset and dataloader utilities for multiprocessing
 train_data = Kitti_3D_Object_Dataset("/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed",mode = "training")
 test_data = Kitti_3D_Object_Dataset("/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed",mode = "testing")
 
-# plot an example
-idx = random.randint(0,len(train_data))
-train_data.show(idx,plot_3D = True)
+## plot an example
+#idx = random.randint(0,len(train_data))
+#train_data.show(idx,plot_3D = True)
 
 # set multiprocessing mode
 try:
@@ -398,7 +399,7 @@ except:
 params = {'batch_size': 32,
           'shuffle': True,
           'pin_memory': False,
-          'num_workers': 0}
+          'num_workers': 2}
 
 trainloader = data.DataLoader(train_data, **params)
 testloader = data.DataLoader(test_data, **params)
@@ -489,8 +490,9 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
             axs[i//row_size,i%row_size].set_title(label)
             axs[i//row_size,i%row_size].set_xticks([])
             axs[i//row_size,i%row_size].set_yticks([])
-    plt.pause(.0001)
+    plt.pause(5.0)
     fig.show()
+    plt.pause(5.0)
     torch.cuda.empty_cache()
 
 def load_model(checkpoint_file,model,optimizer):
@@ -612,7 +614,7 @@ def tensor_prism(params):
     """
     returns an N x 16 tensor of prism corner coords maintaining backpropogation abilities
     params - N x 11 tensor of parameters that define a rectangular prism in 
-             2-dimensional space [x,y,w,h,l,front_angle,sin_o,cos_o,w_shrink,h_shrink,l_shrink]
+             2-dimensional space [x,y,w,h,l,front_angle,sin_o,cos_o,flip,w_shrink,h_shrink,l_shrink]
              x,y - int - center coordinates of front of box
              w,h - int - width and avg height of front of box
              l - int - distance between center of front of box and center of back of box
@@ -652,34 +654,38 @@ def tensor_prism(params):
     points[:,0,4:8] = points[:,0,0:4] + x_shift.repeat(1,4)
     points[:,1,4:8] = points[:,1,0:4] + y_shift.repeat(1,4)
     
-    # apply width shrink (if  greater than 0.5, enlarges left side, otherwise shrinks)
-    w_shrink = (params[:,8] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
-    w_points = torch.tensor([1,2,5,6]).to(device)
-    w_avg = (torch.mean(torch.index_select(points,2,w_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
-    w_diff = w_avg - torch.index_select(points,2,w_points)
-    points[:,:,w_points] = torch.index_select(points,2,w_points) + 2*torch.mul(w_diff,w_shrink)
-    
-    # apply height shrink (if less than 0.5, shrinks top)
-    h_shrink = (params[:,9] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
-    h_points = torch.tensor([2,3,6,7]).to(device)
-    h_avg = (torch.mean(torch.index_select(points,2,h_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
-    h_diff = h_avg - torch.index_select(points,2,h_points)
-    points[:,:,h_points] = torch.index_select(points,2,h_points) + 2*torch.mul(h_diff,h_shrink)
-    
-    # apply length shrink (if less than 0.5, shrinks back face)
-    l_shrink = (params[:,10] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
-    l_points = torch.tensor([4,5,6,7]).to(device)
-    l_avg = (torch.mean(torch.index_select(points,2,l_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
-    l_diff = l_avg - torch.index_select(points,2,l_points)
-    points[:,:,l_points] = torch.index_select(points,2,l_points) + 2*torch.mul(l_diff,l_shrink)
+#    # apply width shrink (if  greater than 0.5, enlarges left side, otherwise shrinks)
+#    w_shrink = (params[:,8] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
+#    w_points = torch.tensor([1,2,5,6]).to(device)
+#    w_avg = (torch.mean(torch.index_select(points,2,w_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
+#    w_diff = w_avg - torch.index_select(points,2,w_points)
+#    points[:,:,w_points] = torch.index_select(points,2,w_points) + 2*torch.mul(w_diff,w_shrink)
+#    
+#    # apply height shrink (if less than 0.5, shrinks top)
+#    h_shrink = (params[:,9] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
+#    h_points = torch.tensor([2,3,6,7]).to(device)
+#    h_avg = (torch.mean(torch.index_select(points,2,h_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
+#    h_diff = h_avg - torch.index_select(points,2,h_points)
+#    points[:,:,h_points] = torch.index_select(points,2,h_points) + 2*torch.mul(h_diff,h_shrink)
+#    
+#    # apply length shrink (if less than 0.5, shrinks back face)
+#    l_shrink = (params[:,10] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
+#    l_points = torch.tensor([4,5,6,7]).to(device)
+#    l_avg = (torch.mean(torch.index_select(points,2,l_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
+#    l_diff = l_avg - torch.index_select(points,2,l_points)
+#    points[:,:,l_points] = torch.index_select(points,2,l_points) + 2*torch.mul(l_diff,l_shrink)
     
     # map easy working space into correct space
     #in  fbr fbl ftl ftr rbr rbl rtl rtr
     #out fbr fbl rbl rbr ftr ftl rtl rtr
 
     #points[:,:,:] = points[:,:,[0,1,5,4,3,2,6,7]]
+    flip = torch.index_select(params,1,torch.tensor([8]).to(device)).unsqueeze(1).repeat(1,2,8)
+    
     indices = torch.tensor([0,1,5,4,3,2,6,7]).to(device)
-    points = torch.index_select(points,2,indices)
+    flip_indices = torch.tensor([1,0,4,5,2,3,7,6]).to(device)
+    points = torch.mul(torch.index_select(points,2,indices),(1.0-flip)) + \
+             torch.mul(torch.index_select(points,2,flip_indices),flip)
     return points
 
 
@@ -778,8 +784,14 @@ class Prism_MSE_Loss(nn.Module):
             MSE loss compared to target corner coords"""
         
         # get bbox coords from params
-        outputs = tensor_prism(preds).view(target.shape)
-        return self.mse(outputs,target)
+        outputs = tensor_prism(preds)
+        target = target.view(outputs.shape)
+        
+        diff = outputs-target
+        mul = torch.mul(diff,diff)
+        mul_sum = torch.sum(mul,1)
+        sqrt = torch.sqrt(mul_sum)
+        return torch.mean(sqrt)
 
 """### 2. nn.MSELoss() on orientation angle"""
 
@@ -810,6 +822,18 @@ class Pythagorean_Loss(nn.Module):
         targ = torch.ones(out.shape,requires_grad = False).float().to(device)
 
         return self.mse(out,targ)
+    
+    
+class Flip_Loss(nn.Module):        
+    def __init__(self):
+        super(Flip_Loss,self).__init__()
+
+    def forward(self,preds):
+        """ To learn that flip = 1 or 0"""
+        out = torch.mul(preds[:,8],1-preds[:,8]) 
+
+        return torch.mean(out)
+    
 
 """### 4. Combination Loss"""
 
@@ -820,97 +844,87 @@ class Combination_Loss(nn.Module):
         self.prism = prism
         self.pythagorean_loss = Pythagorean_Loss()
         self.prism_loss = Prism_MSE_Loss()
-        
     def forward(self,inputs,targets):
         """ Combine constituent losses"""
         
         return self.pyth * self.pythagorean_loss(inputs)    + \
                self.prism       * self.prism_loss(inputs, targets)
-
-
-class Init_Loss(nn.Module):        
-    def __init__(self):
-        super(Init_Loss,self).__init__()
-        
-        
-    def forward(self,inputs,dummy_targets):
-        """ Train to output all ones"""
-
-        return 1 - torch.mean(inputs)
+               
 
 """## Main Training Loop
 
 ### 1. Input training parameters
 """
-
-save_every = 1
-num_epochs = 100
-learning_rate_init = 0.01
-
-checkpoint_file = "checkpoint_0.pt"
-show_output_every = True
-restart_from_epoch_0 = False
-
-criterion = Combination_Loss(prism = 0.75, pythagorean = 0.25)
-
-"""### 2. Prep for running"""
-
-start_epoch = 0
-
-# CUDA for PyTorch
-use_cuda = torch.cuda.is_available()
-device = torch.device("cuda:0" if use_cuda else "cpu")
-torch.cuda.empty_cache()
-model = model.to(device)
-model.cuda()
-
-# all parameters are being optimized, not just fc layer
-optimizer = optim.SGD(model.parameters(), lr=learning_rate_init,momentum = 0.9)    
-
-# Decay LR by a factor of 0.8 every epoch
-exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
-
-
-# if checkpoint specified, load model and optimizer weights from checkpoint
-if checkpoint_file != None:
-    if restart_from_epoch_0:
-        model,_,_ = load_model(checkpoint_file, model, optimizer) 
-    else:
-        model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
-
-        
-        
-# group dataloaders
-dataloaders = {"train":trainloader, "val": testloader}
-datasizes = {"train": len(train_data), "val": len(test_data)}
-
-args =   {"model": model,
-          "criterion": criterion,
-          "optimizer": optimizer,
-          "scheduler": exp_lr_scheduler,
-          "dataloaders":dataloaders,
-          "datasizes": datasizes,
-          "device": device,
-          "num_epochs": num_epochs,
-          "start_epoch": start_epoch,
-          "show_output_every":show_output_every,
-          "save_every":save_every
-         }
-
-"""### 3. Train"""
-
-# Commented out IPython magic to ensure Python compatibility.
-# %matplotlib inline
-
-# train model
-torch.cuda.empty_cache()
-print("Beginning training on {}.".format(device))
-model = train_model(**args)
-
-#plot_batch(model,next(iter(trainloader)))
-#out = model(next(iter(trainloader))[0].to(device))
-#out
-#
-#batch = model(next(iter(trainloader))[0].to(device))
-#test = torch.tensor([0.5,0.5,0.25,0.25,0.3,0.3,0.6,0.8,0.5,0.5,0.5]).repeat(32,1).to(device)
-#out = tensor_prism_try_again(test)
+if __name__ == "__main__":
+    save_every = 1
+    num_epochs = 30
+    learning_rate_init = 0.01
+    
+    checkpoint_file = "checkpoint_6.pt"
+    show_output_every = False
+    restart_from_epoch_0 = False
+    
+    criterion = Combination_Loss(prism = 0.9, pythagorean = 0.1)
+    
+    """### 2. Prep for running"""
+    
+    start_epoch = 0
+    
+    # CUDA for PyTorch
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+    torch.cuda.empty_cache()
+    model = model.to(device)
+    model.cuda()
+    
+    # all parameters are being optimized, not just fc layer
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate_init,momentum = 0.9)    
+    
+    # Decay LR by a factor of 0.8 every epoch
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
+    
+    
+    # if checkpoint specified, load model and optimizer weights from checkpoint
+    if checkpoint_file != None:
+        if restart_from_epoch_0:
+            model,_,_ = load_model(checkpoint_file, model, optimizer) 
+        else:
+            model,optimizer,start_epoch = load_model(checkpoint_file, model, optimizer)
+    
+            
+            
+    # group dataloaders
+    dataloaders = {"train":trainloader, "val": testloader}
+    datasizes = {"train": len(train_data), "val": len(test_data)}
+    
+    args =   {"model": model,
+              "criterion": criterion,
+              "optimizer": optimizer,
+              "scheduler": exp_lr_scheduler,
+              "dataloaders":dataloaders,
+              "datasizes": datasizes,
+              "device": device,
+              "num_epochs": num_epochs,
+              "start_epoch": start_epoch,
+              "show_output_every":show_output_every,
+              "save_every":save_every
+             }
+    
+    """### 3. Train"""
+    
+    # Commented out IPython magic to ensure Python compatibility.
+    # %matplotlib inline
+    
+    # train model
+    torch.cuda.empty_cache()
+    print("Beginning training on {}.".format(device))
+    model = train_model(**args)
+    
+#    plot_batch(model,next(iter(trainloader)))
+#    
+#    
+#    batch = model(next(iter(trainloader))[0].to(device))
+#    
+#    test = torch.tensor([0.5,0.5,0.25,0.25,0.3,0.3,0.6,0.8,0.5,0.5,0.5]).repeat(32,1).to(device)
+#    out2 = tensor_prism(batch).cpu().data.numpy()
+#    batch = batch.cpu().data.numpy()
