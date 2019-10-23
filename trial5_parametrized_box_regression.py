@@ -430,10 +430,13 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
     for i in range(0,batch_size):
         im =  batch[i].transpose((1,2,0))
         bbox = bboxes[i].reshape(2,-1)
+        # transform bbox coords back into im pixel coords
+        bbox = np.round(bbox* 224*wer - 224*(wer-1)/2)
         
-        if False:   #plot correct labels instead
-            bbox = correct_labels[i].reshape(2,-1)
         
+        bbox2 = correct_labels[i].reshape(2,-1)
+        bbox2 = np.round(bbox2* 224*wer - 224*(wer-1)/2)
+
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
         im = std * im + mean
@@ -453,13 +456,12 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
         
 #        label = "{}".format(class_dict[int(correct_classes[i,0])])
         label = "dummy"
-        # transform bbox coords back into im pixel coords
-        bbox = np.round(bbox* 224*wer - 224*(wer-1)/2)
-        # plot bboxes
-        
+       
+        # plot bboxes        
         if True:
             new_im = im.copy()
             coords = np.transpose(bbox).astype(int)
+            coords2 = np.transpose(bbox2).astype(int)
             #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
             edge_array= np.array([[0,1,0,1,1,0,0,0],
                                   [1,0,1,0,0,1,0,0],
@@ -474,8 +476,10 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
             for i2 in range(0,8):
                 for j2 in range(0,8):
                     if edge_array[i2,j2] == 1:
-                        cv2.line(new_im,(coords[i2,0],coords[i2,1]),(coords[j2,0],coords[j2,1]),(10,230,160),1)
-        
+                        cv2.line(new_im,(coords[i2,0],coords[i2,1]),(coords[j2,0],coords[j2,1]),(0,5,30),1)
+                        if True:
+                            cv2.line(new_im,(coords2[i2,0],coords2[i2,1]),(coords2[j2,0],coords2[j2,1]),(10,255,0),1)
+ 
         # get array from CV image (UMat style)
         #im = im.get()
         
@@ -604,7 +608,7 @@ def train_model(model, criterion, optimizer, scheduler,
     time_elapsed = time.time() - start_time
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
-    print('Best val Acc: {:4f}'.format(best_acc))
+    print('Best val loss: {:4f}'.format(best_loss))
 
     # load best model weights
     model.load_state_dict(best_model_wts)
@@ -857,10 +861,10 @@ class Combination_Loss(nn.Module):
 """
 if __name__ == "__main__":
     save_every = 1
-    num_epochs = 30
+    num_epochs = 80
     learning_rate_init = 0.01
     
-    checkpoint_file = "checkpoint_6.pt"
+    checkpoint_file = "checkpoint_70.pt"
     show_output_every = False
     restart_from_epoch_0 = False
     
@@ -918,9 +922,9 @@ if __name__ == "__main__":
     # train model
     torch.cuda.empty_cache()
     print("Beginning training on {}.".format(device))
-    model = train_model(**args)
+#    model = train_model(**args)
     
-#    plot_batch(model,next(iter(trainloader)))
+    plot_batch(model,next(iter(testloader)))
 #    
 #    
 #    batch = model(next(iter(trainloader))[0].to(device))
