@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 import math
 
 global wer #window expansion size, controls how far out of frame bbox can be predicted 
-wer = 2
+wer = 3
 
 class Kitti_3D_Object_Dataset(data.Dataset):
     """
@@ -125,7 +125,9 @@ class Kitti_3D_Object_Dataset(data.Dataset):
         y_height_front = ((bbox_3d[1,1]+bbox_3d[1,0]) - (bbox_3d[1,5]+bbox_3d[1,4]))/4.0
         x_width_back =   ((bbox_3d[0,2]+bbox_3d[0,6]) - (bbox_3d[0,7]+bbox_3d[0,3]))/4.0
         y_height_back =   ((bbox_3d[1,2]+bbox_3d[1,3]) - (bbox_3d[1,7]+bbox_3d[1,6]))/4.0
-        
+        l_ratio = (x_width_back/x_width_front + y_height_back/y_height_front)/2.0 -0.5
+        l_ratio = (y_height_back/y_height_front) -0.5
+
         w = (x_width_front)/2#  + x_width_back)/4 don't fully know why it's divided by 2 here
         h = (y_height_front)/2# + y_height_back)/4
         rot = 0.5
@@ -135,7 +137,7 @@ class Kitti_3D_Object_Dataset(data.Dataset):
         
         sin_o = (((avg_y_back-avg_y_front)/l)+1)/2 # shift from [-1,1] to [0,1]
         cos_o = (((avg_x_back-avg_x_front)/l)+1)/2 
-        box_params = np.array([avg_x_front,avg_y_front,w,h,l,rot,sin_o,cos_o,flip])
+        box_params = np.array([avg_x_front,avg_y_front,w,h,l,rot,sin_o,cos_o,flip,l_ratio])
         
         # tensorize
         bbox_2d = torch.from_numpy(bbox_2d).float()
@@ -296,7 +298,7 @@ def tensor_prism(params):
     """
     returns an N x 16 tensor of prism corner coords maintaining backpropogation abilities
     params - N x 11 tensor of parameters that define a rectangular prism in 
-             2-dimensional space [x,y,w,h,l,front_angle,sin_o,cos_o,flip,w_shrink,h_shrink,l_shrink]
+             2-dimensional space [x,y,w,h,l,front_angle,sin_o,cos_o,flip,l_ratio]
              x,y - int - center coordinates of front of box
              w,h - int - width and avg height of front of box
              l - int - distance between center of front of box and center of back of box
@@ -335,33 +337,19 @@ def tensor_prism(params):
     # get rear of box
     points[:,0,4:8] = points[:,0,0:4] + x_shift.repeat(1,4)
     points[:,1,4:8] = points[:,1,0:4] + y_shift.repeat(1,4)
-    
-#    # apply width shrink (if  greater than 0.5, enlarges left side, otherwise shrinks)
-#    w_shrink = (params[:,8] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
-#    w_points = torch.tensor([1,2,5,6]).to(device)
-#    w_avg = (torch.mean(torch.index_select(points,2,w_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
-#    w_diff = w_avg - torch.index_select(points,2,w_points)
-#    points[:,:,w_points] = torch.index_select(points,2,w_points) + 2*torch.mul(w_diff,w_shrink)
-#    
-#    # apply height shrink (if less than 0.5, shrinks top)
-#    h_shrink = (params[:,9] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
-#    h_points = torch.tensor([2,3,6,7]).to(device)
-#    h_avg = (torch.mean(torch.index_select(points,2,h_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
-#    h_diff = h_avg - torch.index_select(points,2,h_points)
-#    points[:,:,h_points] = torch.index_select(points,2,h_points) + 2*torch.mul(h_diff,h_shrink)
-#    
-#    # apply length shrink (if less than 0.5, shrinks back face)
-#    l_shrink = (params[:,10] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
-#    l_points = torch.tensor([4,5,6,7]).to(device)
-#    l_avg = (torch.mean(torch.index_select(points,2,l_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
-#    l_diff = l_avg - torch.index_select(points,2,l_points)
-#    points[:,:,l_points] = torch.index_select(points,2,l_points) + torch.mul(l_diff,l_shrink)
+
+#    # apply length ratio(if less than 1, shrinks back face)
+    l_ratio = (params[:,9] + 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
+    l_points = torch.tensor([4,5,6,7]).to(device)
+    l_avg = (torch.mean(torch.index_select(points,2,l_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
+    l_diff =  torch.index_select(points,2,l_points) - l_avg
+    points[:,:,l_points] = l_avg + torch.mul(l_diff,l_ratio)
     
     # map easy working space into correct space
     #in  fbr fbl ftl ftr rbr rbl rtl rtr
     #out fbr fbl rbl rbr ftr ftl rtl rtr
 
-    #points[:,:,:] = points[:,:,[0,1,5,4,3,2,6,7]]
+    # flip so that indices are correct in examples where front is behind back
     flip = torch.index_select(params,1,torch.tensor([8]).to(device)).unsqueeze(1).repeat(1,2,8)
     
     indices = torch.tensor([0,1,5,4,3,2,6,7]).to(device)
