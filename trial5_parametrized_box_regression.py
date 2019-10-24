@@ -99,7 +99,7 @@ class VGGBoxNet(nn.Module):
         # get size of some layers
         start_num = 25088
         mid_num = int(np.sqrt(start_num))
-        reg_out_num = 9 # bounding box coords
+        reg_out_num = 11 # bounding box coords
         
         # define regressor
         self.vgg.classifier = nn.Sequential(
@@ -139,6 +139,237 @@ model.cuda()
 
 ### 1. Define Dataset Class
 """
+
+class Synthetic_Dataset_3D(data.Dataset):
+    """
+    Defines dataset and transforms for training data. The positive images and 
+    negative images are stored in two different directories
+    """
+    def __init__(self,directory, max_scaling = 4,mode= "train"):
+
+        if mode == "train":
+            self.im_dir = os.path.join(directory,"training_0")
+        elif mode == "test":
+            self.im_dir = os.path.join(directory,"testing_0")
+
+        self.max_scaling = max_scaling
+        self.class_dict = {
+                'car': 0,
+                'van': 1,
+                'truck': 2,
+                'pedestrian':3,
+                'person_sitting':4,
+                'cyclist':5,
+                'tram': 6,
+                'misc': 7
+                }
+        
+        # use os module to get a list of training image files
+        # note that shuffling in dataloader is essential because these are ordered
+        self.images =  [f for f in os.listdir(self.im_dir)]
+        self.images.sort()
+        
+        with open(os.path.join(directory,"all_labels_0.cpkl"),'rb') as f:
+            self.labels = pickle.load(f) # dictionary keyed by image file name
+        
+        # remove all images for which label was not correctly added
+        removals = []
+        for item in self.images:
+            try:
+                self.labels[item]
+            except:
+                removals.append(item)
+        removals.reverse()
+        for item in removals:
+            self.images.remove(item)
+            
+        # define transform
+        self.transforms = transforms.Compose([\
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+    
+    def __len__(self):
+        #Denotes the total number of samples
+        return len(self.images) 
+
+    def __getitem__(self, index):
+        #Generates one sample of data
+        file_name = os.path.join(self.im_dir,self.images[index])
+        
+        # load relevant files
+        im = Image.open(file_name).convert('RGB')
+        y = self.labels[self.images[index]]
+        bbox_2d = y[1]
+        bbox_3d = y[2]
+        cls = y[0]
+            
+        cls =  self.class_dict[cls.lower()]
+        
+        # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
+        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224)
+        
+        # normalize and convert image to tensor
+        X = self.transforms(im)
+                
+        # normalize 2d and 3d corners wrt image size and convert to tensor
+        # pad to wer times image size because bbox may fall outside of visible coordinates
+        bbox_2d[0] = (bbox_2d[0]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        bbox_2d[1] = (bbox_2d[1]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
+        bbox_2d[2] = (bbox_2d[2]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        bbox_2d[3] = (bbox_2d[3]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
+        
+        # bbox covers whole area
+        #bbox_2d = np.array([0.0,0.0,1.0,1.0])
+        
+        bbox_2d = torch.from_numpy(bbox_2d).float()
+        
+        bbox_3d[0,:] = (bbox_3d[0,:]+im.size[0]*(wer-1)/2)/(im.size[0]*wer)
+        bbox_3d[1,:] = (bbox_3d[1,:]+im.size[1]*(wer-1)/2)/(im.size[1]*wer)
+        
+#        bbox_3d_shifted = bbox_3d[:,[2,5,6,1,3,4,7,0]]
+#        bbox_3d = bbox_3d_shifted
+        # input is in order rtr rbr fbr ftr ftl fbl rbl rtl
+        # needs to be order fbr fbl rbl rbr ftr ftl rtl rtr
+        
+        
+        
+        
+#        new_x = bbox_3d[0,:4]
+#        new_y = np.zeros([4]) 
+#
+#        new_y[0] = (bbox_3d[1,0]  +bbox_3d[1,1])/2
+#        new_y[1] = (bbox_3d[1,2] +bbox_3d[1,3])/2
+#        new_y[2] = (bbox_3d[1,4] +bbox_3d[1,5])/2
+#        new_y[3] = (bbox_3d[1,6] +bbox_3d[1,7])/2
+#
+#        bbox_3d = np.concatenate((new_x,new_y),0)
+        
+        bbox_3d = torch.from_numpy(bbox_3d.reshape(16)).float()
+        
+        
+        # clamp to prevent really large anomalous values
+        bbox_3d = torch.clamp(bbox_3d,min = 0.0)
+        bbox_3d = torch.clamp(bbox_3d,max = 1.0)
+        
+        cls = torch.LongTensor([cls])
+        # y is a tuple of four tensors: cls,2dbbox, 3dbbox, and camera calibration matrix
+        y = (cls,bbox_2d,bbox_3d)
+        
+        return X, y
+    
+    def scale_crop(self,im,bb2d,bb3d,imsize = 224):
+        """
+        center-crop image and adjust labels accordingly
+        """
+    
+        #define parameters for random transform
+        # verfify that scale will at least accomodate crop size
+        scale = imsize*(1+np.random.rand()) / max(im.size)
+        
+        # transform matrix
+        im = transforms.functional.affine(im,0,(0,0),scale,0)
+        (xsize,ysize) = im.size
+        
+        # clockwise from top left corner        
+        # add 5th point corresponding to image center
+        corners = np.array([[bb2d[0],bb2d[1]],[bb2d[2],bb2d[1]],
+                            [bb2d[2],bb2d[3]],[bb2d[0],bb2d[3]],
+                            [int(xsize/2),int(ysize/2)]])
+        new_corners = corners * scale
+        new_corners_3d = bb3d * scale
+
+        # Resulting corners make a skewed, tilted rectangle - realign with axes
+        bbox_2d = np.ones(4)
+        bbox_2d[0] = np.min(new_corners[:4,0])
+        bbox_2d[1] = np.min(new_corners[:4,1])
+        bbox_2d[2] = np.max(new_corners[:4,0])
+        bbox_2d[3] = np.max(new_corners[:4,1])
+        
+        # shift so transformed image center aligns with original image center
+        xshift = xsize/2 - new_corners[4,0]
+        yshift = ysize/2 - new_corners[4,1]
+        bbox_2d[0] = bbox_2d[0] + xshift
+        bbox_2d[1] = bbox_2d[1] + yshift
+        bbox_2d[2] = bbox_2d[2] + xshift
+        bbox_2d[3] = bbox_2d[3] + yshift
+        
+        new_corners_3d[0,:] = new_corners_3d[0,:] + xshift
+        new_corners_3d[1,:] = new_corners_3d[1,:] + yshift
+            
+        # get crop location with normal distribution at image center
+        crop_x = int(random.gauss(im.size[0]/2,xsize/50/scale)-imsize/2)
+        crop_y = int(random.gauss(im.size[1]/2,ysize/50/scale)-imsize/2)
+        
+        # move crop if too close to edge
+        pad = 50
+        if crop_x < pad:
+            crop_x = im.size[0]/2 - imsize/2 # center
+        if crop_y < pad:
+            crop_y = im.size[1]/2 - imsize/2 # center
+        if crop_x > im.size[0] - imsize - pad:
+            crop_x = im.size[0]/2 - imsize/2 # center
+        if crop_y > im.size[0] - imsize - pad:
+            crop_y = im.size[0]/2 - imsize/2 # center  
+        im = transforms.functional.crop(im,crop_y,crop_x,imsize,imsize)
+        
+        # transform bbox points into cropped coords
+        bbox_2d[0] = bbox_2d[0] - crop_x
+        bbox_2d[1] = bbox_2d[1] - crop_y
+        bbox_2d[2] = bbox_2d[2] - crop_x
+        bbox_2d[3] = bbox_2d[3] - crop_y
+        
+        new_corners_3d[0,:] = new_corners_3d[0,:] - crop_x
+        new_corners_3d[1,:] = new_corners_3d[1,:] - crop_y
+        
+        return im, bbox_2d, new_corners_3d
+    
+    
+    def show(self, index,plot_3D = True):
+        #Generates one sample of data
+        file_name = os.path.join(self.im_dir,self.images[index])
+        
+        # load relevant files
+        im = Image.open(file_name).convert('RGB')
+        y = self.labels[self.images[index]]
+        bbox_2d = y[1]
+        bbox_3d = y[2]
+        cls = y[0]
+            
+        cls = self.class_dict[cls.lower()]
+        
+        # transform both image and label (note that the 2d and 3d bbox coords must both be scaled)
+        im,bbox_2d,bbox_3d = self.scale_crop(im,bbox_2d,bbox_3d,imsize = 224)
+        
+        im_array = np.array(im)
+        
+        if plot_3D:
+            new_im = im_array.copy()
+            coords = np.round(np.transpose(bbox_3d)).astype(int)
+            #fbr,fbl,rbl,rbr,ftr,ftl,frl,frr
+            edge_array= np.array([[0,1,0,1,1,0,0,0],
+                                  [1,0,1,0,0,1,0,0],
+                                  [0,1,0,1,0,0,1,1],
+                                  [1,0,1,0,0,0,1,1],
+                                  [1,0,0,0,0,1,0,1],
+                                  [0,1,0,0,1,0,1,0],
+                                  [0,0,1,0,0,1,0,1],
+                                  [0,0,0,1,1,0,1,0]])
+        
+            # plot lines between indicated corner points
+            for i in range(0,8):
+                for j in range(0,8):
+                    if edge_array[i,j] == 1:
+                        cv2.line(new_im,(coords[i,0],coords[i,1]),(coords[j,0],coords[j,1]),(10,230,160),1)
+        else:
+            bbox_2d = bbox_2d.astype(int)
+            new_im = cv2.rectangle(im_array,(bbox_2d[0],bbox_2d[1]),(bbox_2d[2],bbox_2d[3]),(10,230,160),2)
+        
+        plt.imshow(new_im)
+
+
+
+
 
 class Kitti_3D_Object_Dataset(data.Dataset):
     """
@@ -384,6 +615,14 @@ Using the pytorch dataset and dataloader utilities for multiprocessing
 train_data = Kitti_3D_Object_Dataset("/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed",mode = "training")
 test_data = Kitti_3D_Object_Dataset("/media/worklab/data_HDD/cv_data/KITTI/3D_object_parsed",mode = "testing")
 
+
+directory = "/media/worklab/data_HDD/cv_data/Synthetic_car_model_ims"
+    
+#train_data = Synthetic_Dataset_3D(directory,max_scaling = 1.5,mode = "train")
+#test_data = Synthetic_Dataset_3D(directory, mode = "test")
+
+
+
 ## plot an example
 #idx = random.randint(0,len(train_data))
 #train_data.show(idx,plot_3D = True)
@@ -424,7 +663,7 @@ def plot_batch(model,batch,device = torch.device("cuda:0")):
     # define figure subplot grid
     batch_size = len(reg_out)
     row_size = min(batch_size,8)
-    fig, axs = plt.subplots((batch_size+row_size-1)//row_size, row_size, constrained_layout=True)
+    fig, axs = plt.subplots((batch_size+row_size-1)//row_size, row_size, constrained_layout=True,figsize = (20,10))
     
     # for image in batch, put image and associated label in grid
     for i in range(0,batch_size):
@@ -658,26 +897,26 @@ def tensor_prism(params):
     points[:,0,4:8] = points[:,0,0:4] + x_shift.repeat(1,4)
     points[:,1,4:8] = points[:,1,0:4] + y_shift.repeat(1,4)
     
-#    # apply width shrink (if  greater than 0.5, enlarges left side, otherwise shrinks)
-#    w_shrink = (params[:,8] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
-#    w_points = torch.tensor([1,2,5,6]).to(device)
-#    w_avg = (torch.mean(torch.index_select(points,2,w_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
-#    w_diff = w_avg - torch.index_select(points,2,w_points)
-#    points[:,:,w_points] = torch.index_select(points,2,w_points) + 2*torch.mul(w_diff,w_shrink)
+    # apply width shrink (if  greater than 0.5, enlarges left side, otherwise shrinks)
+    w_shrink = (params[:,9] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
+    w_points = torch.tensor([1,2,5,6]).to(device)
+    w_avg = (torch.mean(torch.index_select(points,2,w_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
+    w_diff = w_avg - torch.index_select(points,2,w_points)
+    points[:,:,w_points] = torch.index_select(points,2,w_points) + 2*torch.mul(w_diff,w_shrink)
 #    
 #    # apply height shrink (if less than 0.5, shrinks top)
-#    h_shrink = (params[:,9] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
+#    h_shrink = (params[:,11] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
 #    h_points = torch.tensor([2,3,6,7]).to(device)
 #    h_avg = (torch.mean(torch.index_select(points,2,h_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
 #    h_diff = h_avg - torch.index_select(points,2,h_points)
 #    points[:,:,h_points] = torch.index_select(points,2,h_points) + 2*torch.mul(h_diff,h_shrink)
-#    
-#    # apply length shrink (if less than 0.5, shrinks back face)
-#    l_shrink = (params[:,10] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
-#    l_points = torch.tensor([4,5,6,7]).to(device)
-#    l_avg = (torch.mean(torch.index_select(points,2,l_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
-#    l_diff = l_avg - torch.index_select(points,2,l_points)
-#    points[:,:,l_points] = torch.index_select(points,2,l_points) + 2*torch.mul(l_diff,l_shrink)
+    
+    # apply length shrink (if less than 0.5, shrinks back face)
+    l_shrink = (params[:,10] - 0.5).unsqueeze(1).unsqueeze(1).repeat(1,2,4)
+    l_points = torch.tensor([4,5,6,7]).to(device)
+    l_avg = (torch.mean(torch.index_select(points,2,l_points),axis = 2).view(num_inputs,2,1)).repeat(1,1,4)
+    l_diff = l_avg - torch.index_select(points,2,l_points)
+    points[:,:,l_points] = torch.index_select(points,2,l_points) + 2*torch.mul(l_diff,l_shrink)
     
     # map easy working space into correct space
     #in  fbr fbl ftl ftr rbr rbl rtl rtr
@@ -860,12 +1099,12 @@ class Combination_Loss(nn.Module):
 ### 1. Input training parameters
 """
 if __name__ == "__main__":
-    save_every = 1
+    save_every = 5
     num_epochs = 80
     learning_rate_init = 0.01
     
-    checkpoint_file = "checkpoint_70.pt"
-    show_output_every = False
+    checkpoint_file =  None#"/media/worklab/data_HDD/cv_data/Checkpoints/box_parametrization_9/checkpoint_70.pt"
+    show_output_every = True
     restart_from_epoch_0 = False
     
     criterion = Combination_Loss(prism = 0.9, pythagorean = 0.1)
@@ -885,7 +1124,7 @@ if __name__ == "__main__":
     optimizer = optim.SGD(model.parameters(), lr=learning_rate_init,momentum = 0.9)    
     
     # Decay LR by a factor of 0.8 every epoch
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
     
     
     # if checkpoint specified, load model and optimizer weights from checkpoint
@@ -922,9 +1161,9 @@ if __name__ == "__main__":
     # train model
     torch.cuda.empty_cache()
     print("Beginning training on {}.".format(device))
-#    model = train_model(**args)
+    model = train_model(**args)
     
-    plot_batch(model,next(iter(testloader)))
+#    plot_batch(model,next(iter(testloader)))
 #    
 #    
 #    batch = model(next(iter(trainloader))[0].to(device))
