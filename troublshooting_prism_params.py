@@ -125,15 +125,15 @@ class Kitti_3D_Object_Dataset(data.Dataset):
         y_height_front = ((bbox_3d[1,1]+bbox_3d[1,0]) - (bbox_3d[1,5]+bbox_3d[1,4]))/4.0
         x_width_back =   ((bbox_3d[0,2]+bbox_3d[0,6]) - (bbox_3d[0,7]+bbox_3d[0,3]))/4.0
         y_height_back =   ((bbox_3d[1,2]+bbox_3d[1,3]) - (bbox_3d[1,7]+bbox_3d[1,6]))/4.0
-        l_ratio = (x_width_back/x_width_front + y_height_back/y_height_front)/2.0 -0.5
-        l_ratio = (y_height_back/y_height_front) -0.5
+        #l_ratio = (x_width_back/x_width_front + y_height_back/y_height_front)/2.0 -0.5
+        l_ratio = (y_height_back/y_height_front) -0.5 # use only the height ratio since it is less susceptible to large variations due to angle
 
         w = (x_width_front)/2#  + x_width_back)/4 don't fully know why it's divided by 2 here
         h = (y_height_front)/2# + y_height_back)/4
         rot = 0.5
         l = np.sqrt((avg_x_front-avg_x_back)**2 + (avg_y_front-avg_y_back)**2)
-        flip = int(np.abs(y["alpha"]) <= np.pi/2)
-        w = w if flip else -w
+        flip = int(np.abs(y["alpha"]) >= np.pi/2)
+        w = -w if flip else w
         
         sin_o = (((avg_y_back-avg_y_front)/l)+1)/2 # shift from [-1,1] to [0,1]
         cos_o = (((avg_x_back-avg_x_front)/l)+1)/2 
