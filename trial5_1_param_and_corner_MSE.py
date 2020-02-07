@@ -778,11 +778,11 @@ class Param_MSE_Loss(nn.Module):
 ### 1. Input training parameters
 """
 
-save_every = 1
-num_epochs = 50
+save_every = 5
+num_epochs = 100
 learning_rate_init = 0.001
 
-checkpoint_file = None
+checkpoint_file = "trial5_1_checkpoint_10_save.pt"
 show_output_every = True
 restart_from_epoch_0 = True
 
